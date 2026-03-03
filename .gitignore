@@ -1,0 +1,37 @@
+# ─── Compiled Binaries ───────────────────────────────────────────
+# These are built locally; never commit them
+kv-store
+kv-client
+kv-chaos
+kv-dashboard
+
+# ─── Go Build Artifacts ──────────────────────────────────────────
+/tmp/go-cache/
+/tmp/gobuild/
+
+# ─── Raft Runtime Data ───────────────────────────────────────────
+# Node state, BoltDB logs, snapshots — machine-specific, regenerated on run
+/tmp/raft-kv/
+
+# ─── Log Files ───────────────────────────────────────────────────
+*.log
+/tmp/*.log
+
+# ─── macOS Metadata ──────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ─── Editor / IDE ────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ─── Go Module Cache ─────────────────────────────────────────────
+# go.sum IS committed (reproducible builds) — go.mod IS committed
+# vendor/ is NOT committed unless explicitly vendored
+vendor/
+
+# ─── Test Artifacts ──────────────────────────────────────────────
+# Temporary test output files
+/tmp/verify_*.txt
