@@ -8,6 +8,9 @@
   <img src="https://img.shields.io/badge/Reliability-Chaos%20Tested-success" alt="Chaos Tested">
 
   <br><br>
+
+  <img src="docs/dashboard.png" alt="Raft Chaos Dashboard UI" width="800">
+
 </div>
 
 ---
