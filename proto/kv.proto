@@ -1,0 +1,68 @@
+syntax = "proto3";
+
+package store;
+
+option go_package = "github.com/ankush/raft-kv/proto";
+
+service KVStore {
+  rpc Get(GetRequest) returns (GetResponse);
+  rpc Set(SetRequest) returns (SetResponse);
+  rpc Delete(DeleteRequest) returns (DeleteResponse);
+  rpc Join(JoinRequest) returns (JoinResponse);
+  rpc Health(HealthRequest) returns (HealthResponse);   // Health Endpoint Monitoring pattern
+}
+
+message JoinRequest {
+  string node_id = 1;
+  string raft_addr = 2;
+  string grpc_addr = 3;
+}
+
+message JoinResponse {
+  bool success = 1;
+  string leader_addr = 2; // Provided if the node is not the leader
+}
+
+message GetRequest {
+  string key = 1;
+}
+
+message GetResponse {
+  string value = 1;
+  bool found = 2;
+  string leader_addr = 3; // Provided if the node is not the leader
+}
+
+message SetRequest {
+  string key = 1;
+  string value = 2;
+  string client_id = 3;      // Unique client identifier for idempotency
+  uint64 sequence_num = 4;    // Monotonically increasing sequence number per client
+}
+
+message SetResponse {
+  bool success = 1;
+  string leader_addr = 2; // Provided if the node is not the leader
+}
+
+message DeleteRequest {
+  string key = 1;
+  string client_id = 2;      // Unique client identifier for idempotency
+  uint64 sequence_num = 3;    // Monotonically increasing sequence number per client
+}
+
+message DeleteResponse {
+  bool success = 1;
+  string leader_addr = 2; // Provided if the node is not the leader
+}
+
+// Health Endpoint Monitoring (Resiliency Pattern)
+message HealthRequest {}
+
+message HealthResponse {
+  string node_id = 1;
+  string state = 2;           // "Leader", "Follower", or "Candidate"
+  string leader_addr = 3;     // Current leader's address
+  uint64 applied_index = 4;   // Last applied Raft log index
+  uint32 num_peers = 5;       // Number of peers in the cluster
+}

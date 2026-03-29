@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Raft KV — Chaos Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link
+        href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap"
+        rel="stylesheet" />
+    <style>
+        *,
+        *::before,
+        *::after {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        :root {
+            --bg: #0d0f1a;
+            --surface: #141728;
+            --border: #1e2340;
+            --text: #c9d1e0;
+            --muted: #5a6282;
+            --green: #00e676;
+            --blue: #40c4ff;
+            --yellow: #ffd740;
+            --red: #ff5252;
+            --purple: #ce93d8;
+            --leader-glow: 0 0 18px 4px rgba(0, 230, 118, 0.45);
+            --dead-glow: 0 0 18px 4px rgba(255, 82, 82, 0.45);
+            --follower-glow: 0 0 14px 3px rgba(64, 196, 255, 0.35);
+            --radius: 10px;
+            --mono: 'JetBrains Mono', monospace;
+        }
+
+        body {
+            background: var(--bg);
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            font-size: 14px;
+            min-height: 100vh;
+            display: grid;
+            grid-template-rows: auto 1fr;
+        }
+
+        /* ── Header ── */
+        header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 14px 24px;
+            background: var(--surface);
+            border-bottom: 1px solid var(--border);
+        }
+
+        header h1 {
+            font-size: 16px;
+            font-weight: 600;
+            letter-spacing: .04em;
+            color: #fff;
+        }
+
+        header h1 span {
+            color: var(--green);
+        }
+
+        .badge {
+            font-size: 11px;
+            font-family: var(--mono);
+            padding: 2px 8px;
+            border-radius: 20px;
+            background: rgba(0, 230, 118, .12);
+            color: var(--green);
+            border: 1px solid rgba(0, 230, 118, .3);
+        }
+
+        .badge.bad {
+            background: rgba(255, 82, 82, .12);
+            color: var(--red);
+            border-color: rgba(255, 82, 82, .3);
+        }
+
+        #cluster-status {
+            margin-left: auto;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        #status-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: var(--green);
+            box-shadow: 0 0 8px var(--green);
+        }
+
+        /* ── Main Layout ── */
+        main {
+            display: grid;
+            grid-template-columns: 1fr 320px;
+            grid-template-rows: auto 1fr;
+            gap: 16px;
+            padding: 16px 24px;
+            overflow: hidden;
+        }
+
+        /* ── Panel base ── */
+        .panel {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: var(--radius);
+            overflow: hidden;
+        }
+
+        .panel-header {
+            padding: 10px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+            font-weight: 600;
+            letter-spacing: .06em;
+            text-transform: uppercase;
+            color: var(--muted);
+        }
+
+        .panel-header .icon {
+            font-size: 14px;
+        }
+
+        /* ── Topology ── */
+        #topology-panel {
+            grid-column: 1;
+            grid-row: 1;
+            min-height: 300px;
+        }
+
+        #topology-canvas {
+            width: 100%;
+            height: 280px;
+            display: block;
+        }
+
+        /* ── Controls ── */
+        #controls-panel {
+            grid-column: 1;
+            grid-row: 2;
+        }
+
+        .controls-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+            gap: 10px;
+            padding: 14px 16px;
+        }
+
+        .btn {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 9px 14px;
+            border-radius: 7px;
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text);
+            font-family: 'Inter', sans-serif;
+            font-size: 13px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: background .15s, border-color .15s, box-shadow .15s;
+        }
+
+        .btn:hover {
+            background: rgba(255, 255, 255, .05);
+            border-color: var(--blue);
+            box-shadow: 0 0 8px rgba(64, 196, 255, .2);
+        }
+
+        .btn.danger {
+            border-color: rgba(255, 82, 82, .3);
+            color: var(--red);
+        }
+
+        .btn.danger:hover {
+            background: rgba(255, 82, 82, .1);
+            box-shadow: 0 0 8px rgba(255, 82, 82, .3);
+        }
+
+        .btn.warn {
+            border-color: rgba(255, 215, 64, .3);
+            color: var(--yellow);
+        }
+
+        .btn.warn:hover {
+            background: rgba(255, 215, 64, .08);
+        }
+
+        .btn.partition {
+            border-color: rgba(255, 140, 0, .4);
+            color: #ff8c00;
+        }
+
+        .btn.partition:hover {
+            background: rgba(255, 140, 0, .1);
+        }
+
+        .btn.success {
+            border-color: rgba(0, 230, 118, .3);
+            color: var(--green);
+        }
+
+        .btn.success:hover {
+            background: rgba(0, 230, 118, .08);
+        }
+
+        .btn.purple {
+            border-color: rgba(206, 147, 216, .3);
+            color: var(--purple);
+        }
+
+        .btn.purple:hover {
+            background: rgba(206, 147, 216, .08);
+        }
+
+        /* node selector ── */
+        .btn-row {
+            display: flex;
+            gap: 8px;
+            padding: 0 16px 14px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        label {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        select {
+            background: var(--bg);
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 6px 10px;
+            font-size: 13px;
+            font-family: 'Inter', sans-serif;
+            cursor: pointer;
+        }
+
+        select:focus {
+            outline: none;
+            border-color: var(--blue);
+        }
+
+        /* ── Right sidebar ── */
+        #sidebar {
+            grid-column: 2;
+            grid-row: 1 / span 2;
+            display: flex;
+            flex-direction: column;
+            gap: 14px;
+        }
+
+        /* ── Health metrics ── */
+        #health-panel {
+            flex-shrink: 0;
+        }
+
+        .metric-list {
+            padding: 12px 16px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .metric {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .metric-key {
+            color: var(--muted);
+            font-size: 12px;
+        }
+
+        .metric-val {
+            font-family: var(--mono);
+            font-size: 13px;
+            font-weight: 500;
+        }
+
+        .metric-val.green {
+            color: var(--green);
+        }
+
+        .metric-val.red {
+            color: var(--red);
+        }
+
+        .metric-val.blue {
+            color: var(--blue);
+        }
+
+        .metric-val.yellow {
+            color: var(--yellow);
+        }
+
+        /* ── Event log ── */
+        #log-panel {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 0;
+        }
+
+        #event-log {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px 12px;
+            font-family: var(--mono);
+            font-size: 11.5px;
+            line-height: 1.7;
+            scroll-behavior: smooth;
+        }
+
+        #event-log::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        #event-log::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+
+        .log-entry {
+            display: flex;
+            gap: 8px;
+        }
+
+        .log-time {
+            color: var(--muted);
+            flex-shrink: 0;
+        }
+
+        .log-msg.info {
+            color: var(--text);
+        }
+
+        .log-msg.success {
+            color: var(--green);
+        }
+
+        .log-msg.warn {
+            color: var(--yellow);
+        }
+
+        .log-msg.error {
+            color: var(--red);
+        }
+
+        .log-clear-btn {
+            margin: 8px 12px;
+            padding: 4px 10px;
+            background: transparent;
+            color: var(--muted);
+            border: 1px solid var(--border);
+            border-radius: 5px;
+            font-size: 11px;
+            cursor: pointer;
+            font-family: 'Inter', sans-serif;
+        }
+
+        .log-clear-btn:hover {
+            color: var(--text);
+        }
+
+        /* ── Node log drawer ── */
+        #node-log-panel {
+            flex-shrink: 0;
+        }
+
+        #node-log-output {
+            padding: 10px 12px;
+            font-family: var(--mono);
+            font-size: 10.5px;
+            color: var(--muted);
+            line-height: 1.6;
+            max-height: 140px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            word-break: break-all;
+        }
+
+        #node-log-output::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        #node-log-output::-webkit-scrollbar-thumb {
+            background: var(--border);
+            border-radius: 4px;
+        }
+    </style>
+</head>
+
+<body>
+
+    <!-- ── HEADER ── -->
+    <header>
+        <h1>Raft KV <span>Chaos</span> Dashboard</h1>
+        <span class="badge" id="cluster-badge">Healthy</span>
+        <div id="cluster-status">
+            <div id="status-dot"></div>
+            <span id="status-text" style="font-size:12px;color:var(--muted)">Polling…</span>
+        </div>
+    </header>
+
+    <!-- ── MAIN ── -->
+    <main>
+
+        <!-- Topology -->
+        <div class="panel" id="topology-panel">
+            <div class="panel-header"><span class="icon">🔵</span> Cluster Topology</div>
+            <canvas id="topology-canvas"></canvas>
+        </div>
+
+        <!-- Controls -->
+        <div class="panel" id="controls-panel">
+            <div class="panel-header"><span class="icon">⚡</span> Chaos Controls</div>
+
+            <div class="btn-row">
+                <label for="node-select">Target Node:</label>
+                <select id="node-select">
+                    <option value="">— select —</option>
+                </select>
+            </div>
+
+            <div class="controls-grid">
+                <button class="btn danger" id="btn-kill-leader">💀 Kill Leader</button>
+                <button class="btn danger" id="btn-kill-node">🎯 Kill Node</button>
+                <button class="btn success" id="btn-restart-node">♻️ Restart Node</button>
+                <button class="btn warn" id="btn-drop-packets">📵 Drop Packets</button>
+                <button class="btn warn" id="btn-add-latency">🐢 Add Latency</button>
+                <button class="btn" id="btn-stop-chaos">✅ Stop Chaos</button>
+                <button class="btn partition" id="btn-pause-node">⏸ Pause Node</button>
+                <button class="btn success" id="btn-resume-node">▶ Resume Node</button>
+                <button class="btn purple" id="btn-run-tests">🧪 Run All Tests</button>
+                <button class="btn" id="btn-refresh-log">📄 View Node Log</button>
+            </div>
+        </div>
+
+        <!-- ── SIDEBAR ── -->
+        <aside id="sidebar">
+
+            <!-- Health -->
+            <div class="panel" id="health-panel">
+                <div class="panel-header"><span class="icon">💚</span> Cluster Health</div>
+                <div class="metric-list">
+                    <div class="metric"><span class="metric-key">Leader</span> <span class="metric-val blue"
+                            id="m-leader">—</span></div>
+                    <div class="metric"><span class="metric-key">Raft Term</span> <span class="metric-val yellow"
+                            id="m-term">—</span></div>
+                    <div class="metric"><span class="metric-key">Applied Index</span><span class="metric-val"
+                            id="m-applied">—</span></div>
+                    <div class="metric"><span class="metric-key">Nodes Alive</span> <span class="metric-val green"
+                            id="m-alive">—</span></div>
+                    <div class="metric"><span class="metric-key">MTTR</span> <span class="metric-val"
+                            id="m-mttr">—</span></div>
+                </div>
+            </div>
+
+            <!-- Event Log -->
+            <div class="panel" id="log-panel">
+                <div class="panel-header">
+                    <span class="icon">📋</span> Event Log
+                    <button class="log-clear-btn" id="btn-clear-log" style="margin-left:auto">Clear</button>
+                </div>
+                <div id="event-log"></div>
+            </div>
+
+            <!-- Node Log Drawer -->
+            <div class="panel" id="node-log-panel">
+                <div class="panel-header"><span class="icon">🗂️</span> Node Log (<span id="node-log-label">none</span>)
+                </div>
+                <div id="node-log-output">Select a node and click "View Node Log"</div>
+            </div>
+
+        </aside>
+    </main>
+
+    <script>
+        // ═══════════════════════════════════════════════════════
+        // SHARED STATE
+        // ═══════════════════════════════════════════════════════
+        let lastEventCount = 0;
+        let killTime = null;
+        let seenLeader = null;
+        let liveNodes = [];   // shared between metrics + canvas
+        let pulse = 0;
+
+        // ═══════════════════════════════════════════════════════
+        // DOM REFS
+        // ═══════════════════════════════════════════════════════
+        const mLeader = document.getElementById('m-leader');
+        const mTerm = document.getElementById('m-term');
+        const mApplied = document.getElementById('m-applied');
+        const mAlive = document.getElementById('m-alive');
+        const mMttr = document.getElementById('m-mttr');
+        const statusDot = document.getElementById('status-dot');
+        const statusText = document.getElementById('status-text');
+        const clusterBadge = document.getElementById('cluster-badge');
+        const eventLog = document.getElementById('event-log');
+        const nodeSelect = document.getElementById('node-select');
+        const canvas = document.getElementById('topology-canvas');
+        const ctx = canvas.getContext('2d');
+
+        // ═══════════════════════════════════════════════════════
+        // EVENT LOG
+        // ═══════════════════════════════════════════════════════
+        function ts() {
+            return new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+        function appendEvent(e) {
+            const row = document.createElement('div');
+            row.className = 'log-entry';
+            row.innerHTML = `<span class="log-time">${e.time}</span><span class="log-msg ${e.level}">${e.message}</span>`;
+            eventLog.appendChild(row);
+            eventLog.scrollTop = eventLog.scrollHeight;
+        }
+        document.getElementById('btn-clear-log').addEventListener('click', () => {
+            eventLog.innerHTML = '';
+            lastEventCount = 0;
+        });
+
+        // ═══════════════════════════════════════════════════════
+        // POLLING
+        // ═══════════════════════════════════════════════════════
+        async function poll() {
+            try {
+                const res = await fetch('/api/cluster');
+                if (!res.ok) throw new Error('HTTP ' + res.status);
+                const data = await res.json();
+
+                // Update shared liveNodes first so canvas sees fresh data
+                liveNodes = data.nodes || [];
+
+                updateMetrics(data);
+                updateNodeSelect(liveNodes);
+                updateEvents(data.events);
+
+                statusDot.style.background = 'var(--green)';
+                statusDot.style.boxShadow = '0 0 8px var(--green)';
+                statusText.textContent = 'Live';
+            } catch (err) {
+                statusDot.style.background = 'var(--red)';
+                statusDot.style.boxShadow = '0 0 8px var(--red)';
+                statusText.textContent = 'Disconnected';
+            }
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // METRICS PANEL
+        // ═══════════════════════════════════════════════════════
+        function updateMetrics(data) {
+            const nodes = data.nodes || [];
+            const alive = nodes.filter(n => n.alive);
+            const total = nodes.length;
+            const leader = alive.find(n => n.state === 'Leader');
+
+            const leaderName = leader ? leader.config.id : '—';
+            mLeader.textContent = leaderName;
+
+            if (killTime && leader && leaderName !== seenLeader) {
+                const mttr = ((Date.now() - killTime) / 1000).toFixed(2);
+                mMttr.textContent = mttr + 's';
+                mMttr.style.color = 'var(--green)';
+                killTime = null;
+            }
+            seenLeader = leaderName;
+
+            const maxApplied = alive.reduce((m, n) => Math.max(m, n.applied_index || 0), 0);
+            mApplied.textContent = maxApplied || '—';
+            mTerm.textContent = leader ? (leader.num_peers || '?') + ' peers' : '—';
+
+            mAlive.textContent = `${alive.length} / ${total}`;
+            const quorum = Math.floor(total / 2) + 1;
+            const healthy = alive.length >= quorum;
+            mAlive.style.color = healthy ? 'var(--green)' : 'var(--red)';
+
+            clusterBadge.textContent = healthy ? 'Healthy' : 'DEGRADED';
+            clusterBadge.className = healthy ? 'badge' : 'badge bad';
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // NODE SELECT
+        // ═══════════════════════════════════════════════════════
+        function updateNodeSelect(nodes) {
+            const current = nodeSelect.value;
+            nodeSelect.innerHTML = '<option value="">— select —</option>';
+            nodes.forEach(n => {
+                const opt = document.createElement('option');
+                opt.value = n.config.id;
+                opt.textContent = `${n.config.id} (${n.state || 'Dead'})`;
+                if (n.config.id === current) opt.selected = true;
+                nodeSelect.appendChild(opt);
+            });
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // EVENTS
+        // ═══════════════════════════════════════════════════════
+        function updateEvents(events) {
+            if (!events) return;
+            events.slice(lastEventCount).forEach(appendEvent);
+            lastEventCount = events.length;
+        }
+
+        // ═══════════════════════════════════════════════════════
+        // CANVAS TOPOLOGY RENDERER
+        // ═══════════════════════════════════════════════════════
+        const STATE_COLORS = {
+            Leader: { fill: '#ffd740', glow: 'rgba(255,215,64,0.5)' },
+            Follower: { fill: '#40c4ff', glow: 'rgba(64,196,255,0.35)' },
+            Candidate: { fill: '#ce93d8', glow: 'rgba(206,147,216,0.4)' },
+            Dead: { fill: '#ff5252', glow: 'rgba(255,82,82,0.3)' },
+        };
+
+        function nodePositions(count, cx, cy, r) {
+            return Array.from({ length: count }, (_, i) => {
+                const angle = (2 * Math.PI * i / count) - Math.PI / 2;
+                return { x: cx + r * Math.cos(angle), y: cy + r * Math.sin(angle) };
+            });
+        }
+
+        function drawFrame() {
+            const rect = canvas.getBoundingClientRect();
+            if (canvas.width !== rect.width || canvas.height !== rect.height) {
+                canvas.width = rect.width;
+                canvas.height = rect.height;
+            }
+            const W = canvas.width, H = canvas.height;
+            ctx.clearRect(0, 0, W, H);
+
+            const n = liveNodes.length;
+            if (n === 0) {
+                ctx.fillStyle = '#5a6282';
+                ctx.font = '13px Inter, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText('Waiting for cluster…', W / 2, H / 2);
+                requestAnimationFrame(drawFrame);
+                return;
+            }
+
+            const cx = W / 2, cy = H / 2;
+            const ringR = Math.min(W, H) * 0.33;
+            const BASE_R = 26;
+            const positions = nodePositions(n, cx, cy, ringR);
+
+            // Draw edges
+            for (let i = 0; i < n; i++) {
+                for (let j = i + 1; j < n; j++) {
+                    const bothAlive = liveNodes[i].alive && liveNodes[j].alive;
+                    ctx.beginPath();
+                    ctx.moveTo(positions[i].x, positions[i].y);
+                    ctx.lineTo(positions[j].x, positions[j].y);
+                    ctx.strokeStyle = bothAlive ? 'rgba(64,196,255,0.15)' : 'rgba(255,82,82,0.1)';
+                    ctx.lineWidth = bothAlive ? 1.5 : 1;
+                    ctx.setLineDash(bothAlive ? [] : [4, 4]);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            }
+
+            // Draw nodes
+            pulse += 0.04;
+            const pulseScale = 1 + 0.08 * Math.sin(pulse);
+
+            liveNodes.forEach((node, i) => {
+                const { x, y } = positions[i];
+                const stateKey = node.alive ? (node.state || 'Follower') : 'Dead';
+                const col = STATE_COLORS[stateKey] || STATE_COLORS.Follower;
+                const isLeader = stateKey === 'Leader';
+                const r = isLeader ? BASE_R * pulseScale : BASE_R;
+
+                // Glow halo
+                const grad = ctx.createRadialGradient(x, y, r * 0.4, x, y, r * 2.4);
+                grad.addColorStop(0, col.glow);
+                grad.addColorStop(1, 'rgba(0,0,0,0)');
+                ctx.beginPath();
+                ctx.arc(x, y, r * 2.4, 0, Math.PI * 2);
+                ctx.fillStyle = grad;
+                ctx.fill();
+
+                // Circle fill
+                ctx.beginPath();
+                ctx.arc(x, y, r, 0, Math.PI * 2);
+                ctx.fillStyle = node.alive ? col.fill + '20' : '#1a1c2e';
+                ctx.fill();
+
+                // Circle border
+                ctx.beginPath();
+                ctx.arc(x, y, r, 0, Math.PI * 2);
+                ctx.strokeStyle = col.fill;
+                ctx.lineWidth = isLeader ? 2.5 : 1.8;
+                ctx.stroke();
+
+                // Node ID
+                ctx.fillStyle = node.alive ? '#fff' : '#5a6282';
+                ctx.font = `${isLeader ? 700 : 400} 11px Inter, sans-serif`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(node.config.id, x, y - 4);
+
+                // State label
+                ctx.fillStyle = col.fill;
+                ctx.font = '9px Inter, sans-serif';
+                ctx.fillText(stateKey.toUpperCase(), x, y + 9);
+            });
+
+            requestAnimationFrame(drawFrame);
+        }
+        requestAnimationFrame(drawFrame);
+
+        // ═══════════════════════════════════════════════════════
+        // BUTTON HANDLERS
+        // ═══════════════════════════════════════════════════════
+        async function apiPost(url, msg) {
+            appendEvent({ time: ts(), level: 'warn', message: '⏳ ' + msg });
+            try {
+                const res = await fetch(url, { method: 'POST' });
+                const body = await res.json().catch(() => ({}));
+                if (!res.ok) throw new Error(body.error || 'HTTP ' + res.status);
+            } catch (err) {
+                appendEvent({ time: ts(), level: 'error', message: '❌ ' + err.message });
+            }
+        }
+
+        function selectedNode() {
+            const v = nodeSelect.value;
+            if (!v) { alert('Select a target node first.'); return null; }
+            return v;
+        }
+
+        document.getElementById('btn-kill-leader').addEventListener('click', async () => {
+            const leader = liveNodes.find(n => n.alive && n.state === 'Leader');
+            if (!leader) { appendEvent({ time: ts(), level: 'error', message: '❌ No live leader found' }); return; }
+            killTime = Date.now();
+            await apiPost(`/api/kill/${leader.config.id}`, `Killing leader: ${leader.config.id} (Crash failure)`);
+        });
+
+        document.getElementById('btn-kill-node').addEventListener('click', async () => {
+            const id = selectedNode(); if (!id) return;
+            killTime = Date.now();
+            await apiPost(`/api/kill/${id}`, `Killing node: ${id}`);
+        });
+
+        document.getElementById('btn-restart-node').addEventListener('click', async () => {
+            const id = selectedNode(); if (!id) return;
+            await apiPost(`/api/restart/${id}`, `Restarting ${id} — Raft log replay recovery`);
+        });
+
+        document.getElementById('btn-drop-packets').addEventListener('click', async () => {
+            const id = selectedNode(); if (!id) return;
+            await apiPost(`/api/chaos/drop/${id}?rate=1.0`, `DROP 100% on ${id} (Receive Omission)`);
+        });
+
+        document.getElementById('btn-add-latency').addEventListener('click', async () => {
+            const id = selectedNode(); if (!id) return;
+            await apiPost(`/api/chaos/delay/${id}?ms=3000`, `DELAY 3000ms on ${id} (Send Omission)`);
+        });
+
+        document.getElementById('btn-stop-chaos').addEventListener('click', async () => {
+            const id = selectedNode(); if (!id) return;
+            await apiPost(`/api/chaos/stop/${id}`, `Stopping chaos proxy for ${id}`);
+        });
+
+        document.getElementById('btn-pause-node').addEventListener('click', async () => {
+            const id = selectedNode(); if (!id) return;
+            killTime = Date.now(); // start MTTR timer — partition is like a kill from cluster PoV
+            await apiPost(`/api/pause/${id}`, `⏸ PAUSED ${id} (SIGSTOP — simulating network partition)`);
+        });
+
+        document.getElementById('btn-resume-node').addEventListener('click', async () => {
+            const id = selectedNode(); if (!id) return;
+            await apiPost(`/api/resume/${id}`, `▶ RESUMED ${id} (SIGCONT — partition healed, catching up)`);
+        });
+
+        document.getElementById('btn-refresh-log').addEventListener('click', async () => {
+            const id = selectedNode(); if (!id) return;
+            document.getElementById('node-log-label').textContent = id;
+            try {
+                const res = await fetch(`/api/logs/${id}`);
+                const text = await res.text();
+                const out = document.getElementById('node-log-output');
+                out.textContent = text;
+                out.scrollTop = out.scrollHeight;
+            } catch (e) {
+                document.getElementById('node-log-output').textContent = 'Failed: ' + e.message;
+            }
+        });
+
+        document.getElementById('btn-run-tests').addEventListener('click', async () => {
+            appendEvent({ time: ts(), level: 'info', message: '🧪 Running chaos test suite…' });
+            try {
+                const res = await fetch('/api/run-tests', { method: 'POST' });
+                const body = await res.json().catch(() => ({}));
+                appendEvent({
+                    time: ts(), level: body.passed ? 'success' : 'error',
+                    message: body.passed ? '✅ All tests PASSED' : '❌ Some tests FAILED'
+                });
+            } catch (e) {
+                appendEvent({ time: ts(), level: 'error', message: '❌ Test run error: ' + e.message });
+            }
+        });
+
+        // ═══════════════════════════════════════════════════════
+        // START
+        // ═══════════════════════════════════════════════════════
+        poll();
+        setInterval(poll, 1000);
+    </script>
+
+
+
+</body>
+
+</html>
