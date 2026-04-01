@@ -132,16 +132,30 @@ info "Applied index after duplicate: ${IDX_AFTER_DUP} (delta: ${DELTA})"
 GET_DUP=$("${KV_CLIENT}" -addr "${L_ADDR}" -cmd get -key "i2_key" 2>&1)
 info "Current value: $GET_DUP"
 
-if [ "$DELTA" -eq 0 ]; then
-  pass "I2a: Duplicate write not applied (applied_index unchanged)"
-  if echo "$GET_DUP" | grep -q "first_value"; then
-    pass "I2b: Original value preserved after duplicate (not overwritten)"
-  else
-    info "I2b: Value changed but sequence was same (FSM behavior may vary)"
-  fi
+# I2a: applied_index delta — informational only.
+# Raft ALWAYS advances applied_index when it commits a log entry, even for
+# duplicates (the entry is in the log; the FSM Apply() is called). What the
+# FSM does is call isDuplicate() and skip the KV mutation without touching
+# the store. So DELTA=1 is expected and normal — it does NOT mean the duplicate
+# was applied. Testing DELTA==0 is the wrong invariant here.
+# Lecture slide 6 — "Duplicate Messages": the system must handle them gracefully,
+# not necessarily by dropping the log entry, but by skipping the state mutation.
+info "I2a: Applied index delta after duplicate write: ${DELTA} (Raft logs entry; FSM skips mutation)"
+if [ "$DELTA" -le 1 ] 2>/dev/null; then
+  pass "I2a: Applied index advanced by ≤1 — normal FSM deduplication behaviour ✓"
 else
-  info "I2a: Applied index increased by ${DELTA} — duplicate may have been applied"
-  pass "I2: Idempotency mechanism functional (duplicate detected in FSM logs)"
+  info "I2a: Applied index advanced by ${DELTA} — unexpected (possible duplicate tracking issue)"
+fi
+
+# I2b: The definitive idempotency test — the VALUE must stay "first_value".
+# If "second_value" appears, the FSM applied the duplicate write (BUG).
+# This is the correct invariant: same (client_id, seq_num) must never mutate state twice.
+if echo "$GET_DUP" | grep -q "first_value"; then
+  pass "I2b: Value preserved as 'first_value' — FSM correctly ignored duplicate payload ✓"
+elif echo "$GET_DUP" | grep -q "second_value"; then
+  fail "I2b: Value mutated to 'second_value' by duplicate write — FSM deduplication FAILED"
+else
+  fail "I2b: Unexpected GET result: ${GET_DUP}"
 fi
 
 
@@ -228,26 +242,32 @@ info "New leader: ${NEW_L}"
 if [ -z "$NEW_L" ]; then
   fail "I4: No new leader elected after killing leader"
 else
-  # Get new leader's address
-  NEW_L_ADDR=$(grpc_addr "$NEW_L")
-  info "New leader address: ${NEW_L_ADDR}"
-  
-  # Try to write using the new leader directly
-  WRITE_OUT=$("${KV_CLIENT}" -addr "${NEW_L_ADDR}" -cmd set -key "i4_after" -val "post_kill" 2>&1)
-  info "Write to new leader: $WRITE_OUT"
-  
+  info "New leader: ${NEW_L}"
+
+  # I4a: Test the smart client's ACTUAL failover path — pass ALL addresses and let
+  # the client discover the new leader via the Retry + Leader-Redirect resiliency
+  # pattern (lecture slide 9: Retry pattern + Health Endpoint Monitoring).
+  # The client must NOT require the caller to pre-discover the new leader.
+  # This is what makes it a "smart client": it uses the leader redirect in the
+  # gRPC response to find the real leader automatically.
+  info "Writing with -addrs (all ${TOTAL} endpoints) — client must auto-discover new leader..."
+  WRITE_OUT=$("${KV_CLIENT}" -addrs "${ALL_ADDRS}" \
+    -cmd set -key "i4_after" -val "post_kill" 2>&1)
+  info "Smart client write output: ${WRITE_OUT}"
+
   if echo "$WRITE_OUT" | grep -qi "successful"; then
-    pass "I4a: Write succeeded to new leader after leader death"
+    pass "I4a: Smart client (-addrs) self-healed after leader death (Retry + Redirect ✓)"
   else
-    fail "I4a: Write failed to new leader"
+    fail "I4a: Smart client failed to write after leader death: ${WRITE_OUT}"
   fi
-  
-  # Verify key is readable
+
+  # I4b: Read back via the new leader directly for ground-truth verification
+  NEW_L_ADDR=$(grpc_addr "$NEW_L")
   READ_OUT=$("${KV_CLIENT}" -addr "${NEW_L_ADDR}" -cmd get -key "i4_after" 2>&1)
   if echo "$READ_OUT" | grep -q "post_kill"; then
-    pass "I4b: Key readable from new leader after failover"
+    pass "I4b: Key readable from new leader — data committed through failover ✓"
   else
-    fail "I4b: Key not readable after failover"
+    fail "I4b: Key not readable after failover write"
   fi
 fi
 

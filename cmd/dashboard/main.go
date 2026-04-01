@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -20,6 +21,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 )
+
+//go:embed index.html
+var indexHTML embed.FS
 
 // NodeConfig holds static config for each node in the cluster
 type NodeConfig struct {
@@ -112,26 +116,38 @@ func (m *Manager) log(level, msg string) {
 	log.Printf("[%s] %s", level, msg)
 }
 
-// StartAll starts the cluster. On the very first call it wipes all data
-// directories so we begin with a clean slate. Subsequent calls (e.g. after
-// running the test suite) preserve existing data so durability tests can
-// verify that committed writes survive a full cluster restart.
+// hasBoltData returns true if any node data directory already contains a BoltDB file,
+// meaning this is a restart rather than a first-ever boot.
+func hasBoltData(configs []NodeConfig) bool {
+	for _, cfg := range configs {
+		if _, err := os.Stat(cfg.DataDir + "/raft-log.bolt"); err == nil {
+			return true
+		}
+	}
+	return false
+}
+
+// StartAll starts the cluster. It wipes data directories only when no existing
+// BoltDB data is found — preserving durability across dashboard restarts.
+// Previously this used an in-memory freshStart flag which would wipe data if
+// the dashboard process was restarted mid-demo (Bug 3 fix).
 func (m *Manager) StartAll() {
 	if len(m.agentAddrs) > 0 {
 		m.log("info", "GCP mode: deferring startup to node-agents (no local spawn)")
 		return
 	}
 
-	if !m.freshStart {
-		// First time: wipe and create clean directories.
+	if hasBoltData(m.configs) {
+		// Existing data found — preserve it (durability test or dashboard restart)
+		os.MkdirAll("/tmp/raft-kv/", 0755)
+		m.freshStart = true
+		m.log("info", "Restart: existing BoltDB data found, preserving data directories")
+	} else {
+		// No existing data — clean slate startup
 		os.RemoveAll("/tmp/raft-kv/")
 		os.MkdirAll("/tmp/raft-kv/", 0755)
 		m.freshStart = true
-		m.log("info", "Fresh start: wiped data directories")
-	} else {
-		// Subsequent calls: preserve data for durability.
-		os.MkdirAll("/tmp/raft-kv/", 0755)
-		m.log("info", "Restart: preserving existing data directories")
+		m.log("info", "Fresh start: no existing data found, created clean directories")
 	}
 
 	for i, cfg := range m.configs {
@@ -344,13 +360,16 @@ func (m *Manager) RestartNode(nodeID string) error {
 		np.cmd.Wait() // blocks until process exits; safe even if already dead
 	}
 
-	// Find a live node to join
+	// Find a live node to join. Check with signal(0) — a non-nil Process can still
+	// be a dead/reaped process, so we verify it's actually running before using it.
 	joinAddr := ""
 	m.mu.RLock()
 	for id, n := range m.nodes {
 		if id != nodeID && n.cmd.Process != nil {
-			joinAddr = n.config.GRPCAddr
-			break
+			if err := n.cmd.Process.Signal(syscall.Signal(0)); err == nil {
+				joinAddr = n.config.GRPCAddr
+				break
+			}
 		}
 	}
 	m.mu.RUnlock()
@@ -360,73 +379,105 @@ func (m *Manager) RestartNode(nodeID string) error {
 	return nil
 }
 
-// DirectKVSet performs a SET operation via gRPC to the specified address
+// kvGRPCConn opens an insecure gRPC connection to addr, executes fn, and closes it.
+func kvGRPCConn(addr string, fn func(pb.KVStoreClient, context.Context) error) error {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return fmt.Errorf("failed to connect to %s: %w", addr, err)
+	}
+	defer conn.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return fn(pb.NewKVStoreClient(conn), ctx)
+}
+
+// DirectKVSet performs a SET operation via gRPC. If the target is a follower it
+// automatically follows the leader redirect once so the dashboard KV panel works
+// even if a leadership change happens between the /api/cluster poll and the write.
 func (m *Manager) DirectKVSet(addr, key, val string) (bool, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return false, fmt.Errorf("failed to connect: %w", err)
-	}
-	defer conn.Close()
-
-	client := pb.NewKVStoreClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := client.Set(ctx, &pb.SetRequest{Key: key, Value: val})
-	if err != nil {
-		return false, fmt.Errorf("SET failed: %w", err)
-	}
-	if !resp.Success && resp.LeaderAddr != "" {
-		return false, fmt.Errorf("not leader, redirect to %s", resp.LeaderAddr)
-	}
-	return resp.Success, nil
+	var result bool
+	err := kvGRPCConn(addr, func(c pb.KVStoreClient, ctx context.Context) error {
+		resp, err := c.Set(ctx, &pb.SetRequest{Key: key, Value: val})
+		if err != nil {
+			return fmt.Errorf("SET failed: %w", err)
+		}
+		if !resp.Success && resp.LeaderAddr != "" {
+			// Follow redirect to actual leader
+			return kvGRPCConn(resp.LeaderAddr, func(c2 pb.KVStoreClient, ctx2 context.Context) error {
+				resp2, err2 := c2.Set(ctx2, &pb.SetRequest{Key: key, Value: val})
+				if err2 != nil {
+					return fmt.Errorf("SET (redirected) failed: %w", err2)
+				}
+				result = resp2.Success
+				return nil
+			})
+		}
+		result = resp.Success
+		return nil
+	})
+	return result, err
 }
 
-// DirectKVGet performs a GET operation via gRPC to the specified address
+// DirectKVGet performs a GET operation via gRPC, following a leader redirect if needed.
 func (m *Manager) DirectKVGet(addr, key string) (string, bool, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return "", false, fmt.Errorf("failed to connect: %w", err)
-	}
-	defer conn.Close()
-
-	client := pb.NewKVStoreClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := client.Get(ctx, &pb.GetRequest{Key: key})
-	if err != nil {
-		return "", false, fmt.Errorf("GET failed: %w", err)
-	}
-	if resp.LeaderAddr != "" {
-		return "", false, fmt.Errorf("not leader, redirect to %s", resp.LeaderAddr)
-	}
-	return resp.Value, resp.Found, nil
+	var value string
+	var found bool
+	err := kvGRPCConn(addr, func(c pb.KVStoreClient, ctx context.Context) error {
+		resp, err := c.Get(ctx, &pb.GetRequest{Key: key})
+		if err != nil {
+			return fmt.Errorf("GET failed: %w", err)
+		}
+		if resp.LeaderAddr != "" {
+			// Follow redirect to actual leader
+			return kvGRPCConn(resp.LeaderAddr, func(c2 pb.KVStoreClient, ctx2 context.Context) error {
+				resp2, err2 := c2.Get(ctx2, &pb.GetRequest{Key: key})
+				if err2 != nil {
+					return fmt.Errorf("GET (redirected) failed: %w", err2)
+				}
+				value = resp2.Value
+				found = resp2.Found
+				return nil
+			})
+		}
+		value = resp.Value
+		found = resp.Found
+		return nil
+	})
+	return value, found, err
 }
 
-// DirectKVDelete performs a DELETE operation via gRPC to the specified address
+// DirectKVDelete performs a DELETE operation via gRPC, following a leader redirect if needed.
 func (m *Manager) DirectKVDelete(addr, key string) (bool, error) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return false, fmt.Errorf("failed to connect: %w", err)
-	}
-	defer conn.Close()
-
-	client := pb.NewKVStoreClient(conn)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	resp, err := client.Delete(ctx, &pb.DeleteRequest{Key: key})
-	if err != nil {
-		return false, fmt.Errorf("DELETE failed: %w", err)
-	}
-	if !resp.Success && resp.LeaderAddr != "" {
-		return false, fmt.Errorf("not leader, redirect to %s", resp.LeaderAddr)
-	}
-	return resp.Success, nil
+	var result bool
+	err := kvGRPCConn(addr, func(c pb.KVStoreClient, ctx context.Context) error {
+		resp, err := c.Delete(ctx, &pb.DeleteRequest{Key: key})
+		if err != nil {
+			return fmt.Errorf("DELETE failed: %w", err)
+		}
+		if !resp.Success && resp.LeaderAddr != "" {
+			// Follow redirect to actual leader
+			return kvGRPCConn(resp.LeaderAddr, func(c2 pb.KVStoreClient, ctx2 context.Context) error {
+				resp2, err2 := c2.Delete(ctx2, &pb.DeleteRequest{Key: key})
+				if err2 != nil {
+					return fmt.Errorf("DELETE (redirected) failed: %w", err2)
+				}
+				result = resp2.Success
+				return nil
+			})
+		}
+		result = resp.Success
+		return nil
+	})
+	return result, err
 }
 
 func (m *Manager) StartChaosProxy(nodeID string, dropRate float64, delayMs int) error {
+	// kv-chaos is a local TCP proxy — not applicable in GCP mode where nodes are remote.
+	// Use netem (/api/chaos/netem) or partition (/api/partition) for GCP chaos testing.
+	if len(m.agentAddrs) > 0 {
+		return fmt.Errorf("chaos proxy (drop/delay) is not available in GCP mode — use 'Netem' or 'Partition' buttons instead")
+	}
+
 	m.mu.Lock()
 	np, ok := m.nodes[nodeID]
 	m.mu.Unlock()
@@ -623,13 +674,19 @@ func main() {
 	// API routes
 	mux := http.NewServeMux()
 
-	// Serve the dashboard HTML
+	// Serve the dashboard HTML — embedded at compile time so it works from any directory
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
-		http.ServeFile(w, r, binDir+"/cmd/dashboard/index.html")
+		data, err := indexHTML.ReadFile("index.html")
+		if err != nil {
+			http.Error(w, "dashboard UI not found", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(data)
 	})
 
 	// GET /api/cluster → live cluster state

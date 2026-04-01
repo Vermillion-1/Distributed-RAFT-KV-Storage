@@ -127,7 +127,10 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
 
   # Only node0 needs the verify scripts (for running tests)
   if [ "$i" -eq 0 ]; then
-    gcloud compute scp verify.sh verify_phase2.sh verify_phase3.sh verify_phase4.sh GCP_verify_phase1.sh GCP_verify_phase2.sh GCP_verify_phase3.sh GCP_verify_phase4.sh "${NODES[0]}":~/ \
+    gcloud compute scp verify.sh verify_phase2.sh verify_phase3.sh verify_phase4.sh \
+      GCP_verify_phase1.sh GCP_verify_phase2.sh GCP_verify_phase3.sh GCP_verify_phase4.sh \
+      GCP_verify_phase5.sh GCP_verify_phase6.sh \
+      "${NODES[0]}":~/ \
       --zone="${ZONES[0]}" \
       --quiet
   fi

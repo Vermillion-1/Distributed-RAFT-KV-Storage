@@ -39,9 +39,13 @@ func main() {
 	if *explicitClientID != "" {
 		clientID = *explicitClientID
 	}
-	// Use explicit sequence number if provided, otherwise auto-increment
+	// Use explicit sequence number if provided, otherwise auto-increment.
+	// LIMITATION: -seq-num=0 cannot be detected as "explicitly set" because 0 is the
+	// uint64 zero value. If you pass -seq-num=0, it is silently ignored and auto-increment
+	// is used. Use -seq-num=1 as the minimum testable sequence number.
 	if *explicitSeqNum != 0 {
 		sequenceNo = *explicitSeqNum - 1 // Will become the provided value after atomic add
+		log.Printf("Using explicit seq-num: %d (for idempotency testing)", *explicitSeqNum)
 	}
 
 	// Parse addresses: -addrs takes priority over -addr

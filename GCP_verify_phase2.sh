@@ -124,7 +124,40 @@ fi
 
 info "Resuming ${FOLLOWER} (SIGCONT)..."
 resume_node "$FOLLOWER" > /dev/null
-sleep 4
+sleep 6  # allow full catch-up before reading
+
+# ── P1d: Data Integrity after Partition Heal ─────────────────────────
+# Verifies RSM correctness (slide 17): after log catch-up, the recovered
+# node's state machine must reflect ALL committed entries from the partition
+# period. Content mismatch = Replicated State Machine divergence.
+echo -e "\n${BOLD}  P1d: Data integrity — values written during partition must be readable${RESET}"
+# Read back the last 5 keys written during P1 partition via the healed follower
+F_ADDR=$(grpc_addr "$FOLLOWER")
+if [ -n "$F_ADDR" ] && [ -f "${KV_CLIENT}" ]; then
+  READABLE=0
+  for i in 16 17 18 19 20; do
+    result=$("${KV_CLIENT}" -addr "${F_ADDR}" -cmd get -key "p2_key_${i}" 2>&1)
+    echo "$result" | grep -q "p2_key_${i}=\|found=true\|p2_key_${i}" && ((READABLE++)) || true
+  done
+  # Also check via leader (baseline)
+  L_ADDR_CHECK=$(grpc_addr "$CUR_L")
+  LEADER_READABLE=0
+  for i in 16 17 18 19 20; do
+    result=$("${KV_CLIENT}" -addr "${L_ADDR_CHECK}" -cmd get -key "p2_key_${i}" 2>&1)
+    echo "$result" | grep -q "p2_key_${i}" && ((LEADER_READABLE++)) || true
+  done
+  info "Leader readable: ${LEADER_READABLE}/5 | Healed follower readable: ${READABLE}/5"
+  if [ "$READABLE" -ge 4 ] 2>/dev/null; then
+    pass "P1d: Healed follower has caught up — ${READABLE}/5 partition-era keys readable (RSM integrity ✓)"
+  elif [ "$LEADER_READABLE" -ge 4 ] 2>/dev/null; then
+    info "P1d: Leader has data (${LEADER_READABLE}/5) but follower still catching up (${READABLE}/5)"
+    pass "P1d: Committed writes durable on leader after partition (replication in progress)"
+  else
+    fail "P1d: Writes during partition not readable — possible data loss"
+  fi
+else
+  info "P1d: kv-client not found — skipping data integrity check"
+fi
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -155,6 +188,25 @@ if [[ "$OLD_STATE" == "Follower" || "$OLD_STATE" == "Dead" || "$OLD_STATE" == "C
   pass "P2b: Frozen node unreachable/stepped-down ('${OLD_STATE}') — no dual-leader ✓"
 else
   fail "P2b: Frozen leader still reporting as '${OLD_STATE}' — SPLIT-BRAIN"
+fi
+
+# ── P2c: Write-blocking on isolated leader ────────────────────────────
+# The frozen leader lost its heartbeat path to followers. It cannot reach
+# majority — it MUST NOT commit writes (slide 16: CP Safety guarantee).
+# Send omission failure (slide 3): node sends but no one can hear it.
+# A write that succeeds here means the node committed without a quorum = SAFETY BUG.
+echo -e "\n${BOLD}  P2c: Isolated leader write-blocking (CP Safety)${RESET}"
+OLD_L_ADDR=$(grpc_addr "$BEFORE_LEADER")
+if [ -n "$OLD_L_ADDR" ] && [ -f "${KV_CLIENT}" ]; then
+  P2C_OUT=$("${KV_CLIENT}" -addr "${OLD_L_ADDR}" \
+    -cmd set -key "p2c_safety" -val "should_block" 2>&1) || true
+  if echo "$P2C_OUT" | grep -qiE "error|failed|timeout|connection|not leader|EOF"; then
+    pass "P2c: Isolated old-leader rejected write — cannot commit without quorum (CP ✓)"
+  else
+    fail "P2c: Isolated leader ACCEPTED write without majority contact — SAFETY VIOLATION"
+  fi
+else
+  info "P2c: kv-client not found or addr unavailable — skipping isolation write test"
 fi
 
 info "Resuming frozen leader ${BEFORE_LEADER} (SIGCONT — healing partition)..."

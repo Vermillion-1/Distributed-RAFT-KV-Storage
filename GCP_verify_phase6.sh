@@ -338,6 +338,127 @@ fi
 
 
 # ═══════════════════════════════════════════════════════════════════
+# N6: iptables Partition of the LEADER — true leader isolation test
+#
+# Context: N1 only partitioned a follower (minority partition). This test
+# partitions the LEADER — a majority partition where the leader loses its
+# ability to reach the 2 followers. This is the most dangerous scenario:
+#   - Old leader: cannot reach quorum, must step down (CP Safety, slide 16)
+#   - Followers: detect missing heartbeats → elect a new leader (Liveness)
+#   - Old leader's writes: must be blocked (no quorum → no commit)
+#   - After heal: old leader rejoins as follower, no dual-leader (slide 7)
+# Failure model: Communication Crash Failure (link stop, slide 3) on the
+# leader's Raft port.
+# ═══════════════════════════════════════════════════════════════════
+header "N6: iptables Partition of LEADER — majority partition, new election"
+
+CUR_L=$(wait_leader 10)
+[ -z "$CUR_L" ] && { fail "N6: No leader available"; } || true
+
+if [ -n "$CUR_L" ]; then
+  OLD_L=$CUR_L
+  OLD_L_ADDR=$(grpc_addr "$OLD_L")
+  OLD_TERM=$(cluster | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+ns=[n for n in d['nodes'] if n['config']['id']=='${OLD_L}']
+print(ns[0].get('term',0) if ns else 0)
+" 2>/dev/null)
+  info "Partitioning LEADER: ${OLD_L} (addr=${OLD_L_ADDR}, term=${OLD_TERM:-unknown})"
+
+  # Apply kernel-level iptables DROP on leader's Raft port
+  partition_node "$OLD_L"
+  info "Leader ${OLD_L} is now network-isolated (iptables DROP on Raft port)"
+
+  # Followers must detect missing heartbeats and hold an election.
+  # ElectionTimeout=750ms → expect new leader within ~3-4 seconds.
+  info "Waiting up to 15s for followers to elect a new leader..."
+  T_PARTITION=$SECONDS
+  NEW_L=$(wait_leader 15)
+  T_ELECTED=$SECONDS
+  ELECTION_MTTR=$((T_ELECTED - T_PARTITION))
+  info "New leader: '${NEW_L}' (elected in ~${ELECTION_MTTR}s)"
+
+  if [ -n "$NEW_L" ] && [ "$NEW_L" != "$OLD_L" ]; then
+    pass "N6a: New leader ${NEW_L} elected after leader partition (MTTR ~${ELECTION_MTTR}s ✓)"
+  elif [ -n "$NEW_L" ] && [ "$NEW_L" = "$OLD_L" ]; then
+    fail "N6a: Same leader still elected — partition may not have taken effect"
+  else
+    fail "N6a: No new leader elected within 15s after leader partition"
+  fi
+
+  # N6b: Verify the new leader's term is higher than old leader's term.
+  # In Raft, each election increments the term. Higher term = proof that a
+  # real election took place and old leader's stale responses will be rejected.
+  NEW_TERM=$(cluster | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+ns=[n for n in d['nodes'] if n['config']['id']=='${NEW_L:-__none__}']
+print(ns[0].get('term',0) if ns else 0)
+" 2>/dev/null)
+  info "Old leader term: ${OLD_TERM:-?} | New leader term: ${NEW_TERM:-?}"
+  if [ -n "$NEW_TERM" ] && [ -n "$OLD_TERM" ] && [ "$NEW_TERM" -gt "$OLD_TERM" ] 2>/dev/null; then
+    pass "N6b: Term advanced (${OLD_TERM} → ${NEW_TERM}) — election was genuine, stale leader responses will be rejected ✓"
+  else
+    info "N6b: Term info unavailable or unchanged (term: ${OLD_TERM:-?} → ${NEW_TERM:-?})"
+  fi
+
+  # N6c: Attempt write to the isolated old leader — MUST fail.
+  # The old leader is iptables-DROP'd, so it can't contact followers.
+  # It cannot commit without quorum → writes must block/fail (CP Safety).
+  if [ -n "$OLD_L_ADDR" ] && [ -f "${KV_CLIENT}" ]; then
+    N6C_OUT=$("${KV_CLIENT}" -addr "${OLD_L_ADDR}" \
+      -cmd set -key "n6_isolated_leader" -val "must_not_commit" 2>&1) || true
+    if echo "$N6C_OUT" | grep -qiE "error|failed|timeout|connection|not leader|EOF"; then
+      pass "N6c: Isolated leader rejected write — cannot commit without quorum (CP Safety ✓)"
+    else
+      fail "N6c: Isolated leader ACCEPTED write — SAFETY VIOLATION (committed without majority)"
+    fi
+  else
+    info "N6c: kv-client not available — skipping isolated-leader write test"
+  fi
+
+  # N6d: Writes through the new leader should succeed normally.
+  NEW_L_ADDR=$(grpc_addr "$NEW_L")
+  if [ -n "$NEW_L_ADDR" ] && [ -f "${KV_CLIENT}" ]; then
+    N6D_OUT=$("${KV_CLIENT}" -addr "${NEW_L_ADDR}" \
+      -cmd set -key "n6_new_leader_write" -val "after_partition" 2>&1)
+    if echo "$N6D_OUT" | grep -qi "successful"; then
+      pass "N6d: New leader accepts writes normally — cluster operational after leader partition ✓"
+    else
+      fail "N6d: New leader rejected write: ${N6D_OUT}"
+    fi
+  fi
+
+  # Heal: remove iptables rules and let the old leader rejoin as follower.
+  info "Healing partition on old leader ${OLD_L}..."
+  unpartition_node "$OLD_L"
+  sleep 6
+
+  # N6e: After healing, old leader must rejoin as Follower (not attempt to reclaim leadership).
+  # Term-aware: it will see a higher term in messages → immediately update term and step down.
+  FINAL_STATE=$(node_state "$OLD_L")
+  info "Old leader ${OLD_L} final state after heal: '${FINAL_STATE}'"
+  if [[ "$FINAL_STATE" == "Follower" ]]; then
+    pass "N6e: Former leader rejoined as Follower after heal — no split-brain ✓"
+  elif [[ "$FINAL_STATE" == "Dead" ]]; then
+    info "N6e: Former leader still warming up — state='Dead' (may still be rejoining)"
+  else
+    fail "N6e: Former leader state is '${FINAL_STATE}' after heal — unexpected"
+  fi
+
+  # Verify no data loss on the new leader
+  if [ -n "$NEW_L_ADDR" ] && [ -f "${KV_CLIENT}" ]; then
+    VERIFY=$("${KV_CLIENT}" -addr "${NEW_L_ADDR}" \
+      -cmd get -key "n6_new_leader_write" 2>&1)
+    if echo "$VERIFY" | grep -q "after_partition"; then
+      pass "N6f: Data written during partition period is durable (no write loss) ✓"
+    else
+      fail "N6f: Data written during partition not found — possible write loss"
+    fi
+  fi
+fi
+
+
+# ═══════════════════════════════════════════════════════════════════
 # CLEANUP: Ensure all netem/partition rules are removed
 # ═══════════════════════════════════════════════════════════════════
 header "CLEANUP"
@@ -354,7 +475,7 @@ info "All netem and partition rules removed"
 # RESULTS
 # ═══════════════════════════════════════════════════════════════════
 echo ""
-header "PHASE 6 RESULTS (Kernel-Level Chaos: netem + iptables)"
+header "PHASE 6 RESULTS (Kernel-Level Chaos: netem + iptables + leader partition)"
 TOTAL_TESTS=$((PASS + FAIL))
 echo -e "  ${GREEN}PASS: ${PASS}/${TOTAL_TESTS}${RESET}  |  ${RED}FAIL: ${FAIL}/${TOTAL_TESTS}${RESET}"
 [ $FAIL -eq 0 ] && echo -e "  ${GREEN}${BOLD}All kernel-level chaos tests passed.${RESET}"

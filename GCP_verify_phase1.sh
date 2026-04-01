@@ -35,6 +35,19 @@ drop_packets() { curl -sf -X POST "${API}/chaos/drop/$1?rate=1.0" > /dev/null; }
 add_latency()  { curl -sf -X POST "${API}/chaos/delay/$1?ms=$2" > /dev/null; }
 stop_chaos()   { curl -sf -X POST "${API}/chaos/stop/$1" > /dev/null; }
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+KV_CLIENT="${SCRIPT_DIR}/kv-client"
+
+# Extract grpc_addr for writing directly to a node
+grpc_addr() {
+  local id=$1
+  cluster | python3 -c "
+import sys,json; d=json.load(sys.stdin)
+ns=[n for n in d['nodes'] if n['config']['id']=='${id}']
+print(ns[0]['config']['grpc_addr'] if ns else '')
+" 2>/dev/null
+}
+
 wait_leader() {
   # Wait up to $1 seconds for a leader to emerge, return its id
   local timeout=$1; local t=0
@@ -95,6 +108,30 @@ else
   fail "Cluster only has ${ALIVE}/${TOTAL_NODES} nodes after restart"
 fi
 
+# ── L1c: Write + Linearizable Read — Replicated State Machine consistency ──
+# Directly maps to lecture slide 17 (RSM: all replicas must execute same
+# commands in same order) and slide 16 (Safety: never return incorrect result).
+# A fresh read after leadership change proves the new leader has caught up.
+echo -e "\n${BOLD}  L1c: RSM consistency — write + read after new leader${RESET}"
+NEW_L_ADDR=$(grpc_addr "$NEW_L")
+if [ -n "$NEW_L_ADDR" ] && [ -f "${KV_CLIENT}" ]; then
+  SET_OUT=$("${KV_CLIENT}" -addr "${NEW_L_ADDR}" -cmd set \
+    -key "l1c_probe" -val "consistency_check" 2>&1)
+  if echo "$SET_OUT" | grep -qi "successful"; then
+    GET_OUT=$("${KV_CLIENT}" -addr "${NEW_L_ADDR}" -cmd get \
+      -key "l1c_probe" 2>&1)
+    if echo "$GET_OUT" | grep -q "consistency_check"; then
+      pass "L1c: Write+read consistent on new leader — RSM invariant holds ✓"
+    else
+      fail "L1c: Read returned stale/wrong value after election — RSM divergence"
+    fi
+  else
+    fail "L1c: Write to new leader failed — ${SET_OUT}"
+  fi
+else
+  info "L1c: kv-client not found or leader addr unavailable — skipping RSM check"
+fi
+
 # ── L2: Election Stability — Kill mid-election ────────────────────────
 echo -e "\n${BOLD}L2: Election Stability — Kill mid-election${RESET}"
 L=$(leader)
@@ -137,6 +174,8 @@ print(' '.join(ids))
 " 2>/dev/null)
 
 QUORUM=$(( (TOTAL_NODES / 2) + 1 ))
+# Capture a live node address for the safety write-blocking test (L3b)
+L3_ADDR=$(grpc_addr "$L")
 killed=()
 quorum_lost=false
 for nid in $NODES_LIST; do
@@ -151,6 +190,19 @@ for nid in $NODES_LIST; do
     if [ -z "$L_NOW" ]; then
       pass "L3: Cluster correctly entered Safety mode (no leader) after killing ${#killed[@]}/${TOTAL_NODES} nodes"
       quorum_lost=true
+      # L3b: Safety property proof (lecture slide 16 — "Safety: Never return an incorrect result").
+      # With quorum lost, writes MUST be blocked. A CP system sacrifices availability to
+      # prevent inconsistency. A write that succeeds here would mean a node committed
+      # without a quorum majority — a safety violation.
+      if [ -n "$L3_ADDR" ] && [ -f "${KV_CLIENT}" ]; then
+        SAFETY_OUT=$("${KV_CLIENT}" -addr "${L3_ADDR}" \
+          -cmd set -key "l3b_safety" -val "must_fail" 2>&1) || true
+        if echo "$SAFETY_OUT" | grep -qiE "error|failed|timeout|connection|EOF|not leader"; then
+          pass "L3b: Write correctly blocked under quorum loss (CP Safety ✓)"
+        else
+          fail "L3b: Write appeared to succeed without quorum — SAFETY VIOLATION"
+        fi
+      fi
       break
     else
       fail "L3: Cluster still has leader '$L_NOW' despite losing quorum — SAFETY VIOLATION"
