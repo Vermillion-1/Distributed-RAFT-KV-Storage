@@ -77,6 +77,10 @@ func (s *KVStore) GetGrpcAddr(raftAddr string) string {
 
 // isDuplicate checks if a command with the given client ID and sequence number
 // has already been applied. This prevents duplicate message processing.
+// Note: Clients should send monotonically increasing sequence numbers.
+// - Same seq (retries): duplicate, skip
+// - Lower seq: client bug/duplicate, skip
+// - Higher seq: new request, apply
 func (s *KVStore) isDuplicate(clientID string, seqNum uint64) bool {
 	if clientID == "" {
 		return false // No client ID means no idempotency tracking (backward compatible)

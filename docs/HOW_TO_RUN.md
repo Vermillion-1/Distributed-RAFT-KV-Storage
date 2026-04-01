@@ -20,6 +20,7 @@ We have built a **one-click orchestrator** that handles the complex job of provi
 
 Run the following command from this directory:
 ```bash
+export GCP_PROJECT=[YOUR_PROJECT_ID]
 ./dynamic_deploy.sh 3
 ```
 *   **What this does:**

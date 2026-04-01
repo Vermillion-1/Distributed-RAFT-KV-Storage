@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -25,13 +26,49 @@ func main() {
 	cmd := flag.String("cmd", "get", "Command to run: get, set, delete, health")
 	key := flag.String("key", "", "Key to get/set/delete")
 	val := flag.String("val", "", "Value to set")
-	addr := flag.String("addr", "127.0.0.1:50051", "Address of a cluster node")
+	addr := flag.String("addr", "", "Address of a single cluster node (DEPRECATED: use -addrs)")
+	addrs := flag.String("addrs", "", "Comma-separated addresses (e.g., node0:50051,node1:50052,node2:50053)")
+
+	// Idempotency control flags (for testing duplicate detection)
+	explicitClientID := flag.String("client-id", "", "Explicit client ID for idempotency testing (default: auto-generated UUID)")
+	explicitSeqNum := flag.Uint64("seq-num", 0, "Explicit sequence number for idempotency testing (default: auto-increment)")
 
 	flag.Parse()
 
-	// Health command doesn't require a key
+	// Use explicit client-id if provided, otherwise generate one
+	if *explicitClientID != "" {
+		clientID = *explicitClientID
+	}
+	// Use explicit sequence number if provided, otherwise auto-increment
+	if *explicitSeqNum != 0 {
+		sequenceNo = *explicitSeqNum - 1 // Will become the provided value after atomic add
+	}
+
+	// Parse addresses: -addrs takes priority over -addr
+	var addressList []string
+	if *addrs != "" {
+		addressList = strings.Split(*addrs, ",")
+		// Trim whitespace from each address
+		for i := range addressList {
+			addressList[i] = strings.TrimSpace(addressList[i])
+		}
+		log.Printf("Smart client initialized with %d endpoints: %v", len(addressList), addressList)
+	} else if *addr != "" {
+		addressList = []string{*addr}
+		log.Printf("Using single endpoint (legacy mode): %s", *addr)
+	} else {
+		log.Fatalf("Error: either -addr or -addrs must be specified")
+	}
+
+	// Health command - try each address
 	if *cmd == "health" {
-		queryHealth(*addr)
+		for _, a := range addressList {
+			if ok := tryHealth(a); ok {
+				return
+			}
+			log.Printf("Health check failed for %s, trying next...", a)
+		}
+		log.Fatalf("Health check failed for all addresses")
 		return
 	}
 
@@ -39,26 +76,72 @@ func main() {
 		log.Fatalf("Error: key is required")
 	}
 
-	// Retry loop with leader-redirect support (Retry resiliency pattern)
-	for i := 0; i < 5; i++ {
-		success, leaderAddr := sendRequest(*cmd, *key, *val, *addr)
+	// Smart client main loop with failover support
+	success := smartRequestLoop(*cmd, *key, *val, addressList)
+	if !success {
+		log.Fatalf("Operation failed entirely after trying all addresses")
+	}
+}
 
-		if success {
-			return
+// smartRequestLoop tries each address in order until one succeeds
+func smartRequestLoop(cmd, key, val string, addresses []string) bool {
+	maxRetries := 3
+
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		for i, addr := range addresses {
+			log.Printf("Trying address %d/%d: %s", i+1, len(addresses), addr)
+
+			success, leaderAddr := sendRequest(cmd, key, val, addr)
+
+			if success {
+				return true
+			}
+
+			// Handle leader redirect - use the redirected address
+			if leaderAddr != "" {
+				log.Printf("Redirected to leader at %s, using it...", leaderAddr)
+				// Use leader address for next attempt
+				leaderSuccess, _ := sendRequest(cmd, key, val, leaderAddr)
+				if leaderSuccess {
+					return true
+				}
+			}
+
+			log.Printf("Address %s failed, trying next...", addr)
+			time.Sleep(100 * time.Millisecond)
 		}
 
-		if leaderAddr != "" {
-			log.Printf("Redirecting to leader at %s...", leaderAddr)
-			*addr = leaderAddr
-			time.Sleep(100 * time.Millisecond) // Give it a moment before retry
-			continue
+		if attempt < maxRetries-1 {
+			log.Printf("All addresses failed, retrying in 1s... (attempt %d/%d)", attempt+1, maxRetries)
+			time.Sleep(1 * time.Second)
 		}
-
-		log.Printf("Request failed or node unavailable. Retrying in 1s...")
-		time.Sleep(1 * time.Second)
 	}
 
-	log.Fatalf("Operation failed entirely.")
+	return false
+}
+
+// tryHealth attempts to query health from a single address
+func tryHealth(addr string) bool {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Printf("Failed to connect to %s: %v", addr, err)
+		return false
+	}
+	defer conn.Close()
+
+	c := pb.NewKVStoreClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	resp, err := c.Health(ctx, &pb.HealthRequest{})
+	if err != nil {
+		log.Printf("Health RPC failed for %s: %v", addr, err)
+		return false
+	}
+
+	fmt.Printf("Node: %s | State: %s | Leader: %s | Applied: %d | Peers: %d\n",
+		resp.NodeId, resp.State, resp.LeaderAddr, resp.AppliedIndex, resp.NumPeers)
+	return true
 }
 
 func sendRequest(cmd, key, val, addr string) (bool, string) {

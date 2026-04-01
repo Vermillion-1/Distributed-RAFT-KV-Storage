@@ -65,4 +65,5 @@ message HealthResponse {
   string leader_addr = 3;     // Current leader's address
   uint64 applied_index = 4;   // Last applied Raft log index
   uint32 num_peers = 5;       // Number of peers in the cluster
+  uint64 term = 6;            // Current Raft term number
 }

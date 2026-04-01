@@ -34,6 +34,7 @@ type NodeState struct {
 	Config       NodeConfig `json:"config"`
 	State        string     `json:"state"` // Leader, Follower, Candidate, Dead
 	LeaderAddr   string     `json:"leader_addr"`
+	Term         uint64     `json:"term"` // Raft term number
 	AppliedIndex uint64     `json:"applied_index"`
 	NumPeers     uint32     `json:"num_peers"`
 	Alive        bool       `json:"alive"`
@@ -67,8 +68,8 @@ type Manager struct {
 	configs    []NodeConfig
 	events     []Event
 	binDir     string
-	freshStart bool                // tracks whether this is the initial startup (wipe data) vs restart
-	agentAddrs map[string]string   // B2 (GCP_TODO.md): nodeID → "ip:9000"; non-empty = GCP mode
+	freshStart bool              // tracks whether this is the initial startup (wipe data) vs restart
+	agentAddrs map[string]string // B2 (GCP_TODO.md): nodeID → "ip:9000"; non-empty = GCP mode
 }
 
 type nodeProcess struct {
@@ -258,6 +259,69 @@ func (m *Manager) ResumeNode(nodeID string) error {
 	return nil
 }
 
+// PartitionNode uses iptables to drop ALL Raft traffic to/from the node.
+// Unlike SIGSTOP (Pause), the process keeps running but cannot communicate.
+func (m *Manager) PartitionNode(nodeID string) error {
+	if len(m.agentAddrs) > 0 {
+		if err := m.agentPost(nodeID, "partition"); err != nil {
+			return fmt.Errorf("agent partition failed: %w", err)
+		}
+		m.log("warn", fmt.Sprintf("🔒 PARTITIONED node %s via agent (iptables — true network partition)", nodeID))
+		return nil
+	}
+	return fmt.Errorf("partition requires agent mode (GCP)")
+}
+
+// UnpartitionNode removes iptables rules to heal the partition.
+func (m *Manager) UnpartitionNode(nodeID string) error {
+	if len(m.agentAddrs) > 0 {
+		if err := m.agentPost(nodeID, "unpartition"); err != nil {
+			return fmt.Errorf("agent unpartition failed: %w", err)
+		}
+		m.log("success", fmt.Sprintf("🔓 UNPARTITIONED node %s (iptables rules removed)", nodeID))
+		return nil
+	}
+	return fmt.Errorf("unpartition requires agent mode (GCP)")
+}
+
+// ApplyNetem applies network impairment via tc/netem (latency + packet loss).
+// delay: base delay in milliseconds (e.g., "500")
+// loss: packet loss percentage (e.g., "30")
+// jitter: random variation in ms (e.g., "10")
+func (m *Manager) ApplyNetem(nodeID, delay, loss, jitter string) error {
+	if len(m.agentAddrs) > 0 {
+		url := fmt.Sprintf("netem?delay=%s&loss=%s&jitter=%s", delay, loss, jitter)
+		if err := m.agentPost(nodeID, url); err != nil {
+			return fmt.Errorf("agent netem failed: %w", err)
+		}
+		desc := ""
+		if delay != "" {
+			desc += "delay=" + delay + "ms"
+		}
+		if loss != "" {
+			if desc != "" {
+				desc += ", "
+			}
+			desc += "loss=" + loss + "%"
+		}
+		m.log("warn", fmt.Sprintf("🌩️  NETEM applied on %s: %s", nodeID, desc))
+		return nil
+	}
+	return fmt.Errorf("netem requires agent mode (GCP)")
+}
+
+// RemoveNetem removes tc/netem rules to restore normal networking.
+func (m *Manager) RemoveNetem(nodeID string) error {
+	if len(m.agentAddrs) > 0 {
+		if err := m.agentPost(nodeID, "unnetem"); err != nil {
+			return fmt.Errorf("agent unnetem failed: %w", err)
+		}
+		m.log("success", fmt.Sprintf("✅ NETEM removed on %s (network normal)", nodeID))
+		return nil
+	}
+	return fmt.Errorf("unnetem requires agent mode (GCP)")
+}
+
 func (m *Manager) RestartNode(nodeID string) error {
 	// B2 (GCP_TODO.md): GCP mode — route to node-agent instead of local PID
 	if len(m.agentAddrs) > 0 {
@@ -294,6 +358,72 @@ func (m *Manager) RestartNode(nodeID string) error {
 	m.startNode(np.config, joinAddr)
 	m.log("success", fmt.Sprintf("Restarted %s — recovering via Raft log replay", nodeID))
 	return nil
+}
+
+// DirectKVSet performs a SET operation via gRPC to the specified address
+func (m *Manager) DirectKVSet(addr, key, val string) (bool, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return false, fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewKVStoreClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.Set(ctx, &pb.SetRequest{Key: key, Value: val})
+	if err != nil {
+		return false, fmt.Errorf("SET failed: %w", err)
+	}
+	if !resp.Success && resp.LeaderAddr != "" {
+		return false, fmt.Errorf("not leader, redirect to %s", resp.LeaderAddr)
+	}
+	return resp.Success, nil
+}
+
+// DirectKVGet performs a GET operation via gRPC to the specified address
+func (m *Manager) DirectKVGet(addr, key string) (string, bool, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return "", false, fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewKVStoreClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.Get(ctx, &pb.GetRequest{Key: key})
+	if err != nil {
+		return "", false, fmt.Errorf("GET failed: %w", err)
+	}
+	if resp.LeaderAddr != "" {
+		return "", false, fmt.Errorf("not leader, redirect to %s", resp.LeaderAddr)
+	}
+	return resp.Value, resp.Found, nil
+}
+
+// DirectKVDelete performs a DELETE operation via gRPC to the specified address
+func (m *Manager) DirectKVDelete(addr, key string) (bool, error) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return false, fmt.Errorf("failed to connect: %w", err)
+	}
+	defer conn.Close()
+
+	client := pb.NewKVStoreClient(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	resp, err := client.Delete(ctx, &pb.DeleteRequest{Key: key})
+	if err != nil {
+		return false, fmt.Errorf("DELETE failed: %w", err)
+	}
+	if !resp.Success && resp.LeaderAddr != "" {
+		return false, fmt.Errorf("not leader, redirect to %s", resp.LeaderAddr)
+	}
+	return resp.Success, nil
 }
 
 func (m *Manager) StartChaosProxy(nodeID string, dropRate float64, delayMs int) error {
@@ -411,6 +541,7 @@ func (m *Manager) GetClusterState() ClusterState {
 					ns.LeaderAddr = resp.LeaderAddr
 					ns.AppliedIndex = resp.AppliedIndex
 					ns.NumPeers = resp.NumPeers
+					ns.Term = resp.Term
 					ns.Alive = true
 				}
 			}
@@ -457,8 +588,8 @@ func (m *Manager) agentPost(nodeID, endpoint string) error {
 }
 
 func main() {
-	numNodes   := flag.Int("nodes", 3, "Number of nodes to start (must be odd: 3, 5, 7...)")
-	port       := flag.Int("port", 8080, "Dashboard HTTP port")
+	numNodes := flag.Int("nodes", 3, "Number of nodes to start (must be odd: 3, 5, 7...)")
+	port := flag.Int("port", 8080, "Dashboard HTTP port")
 	// B2 (GCP_TODO.md): when set, kill/pause/resume/restart route to agent HTTP endpoints.
 	// Format: node0=<ip>:9000,node1=<ip>:9000,node2=<ip>:9000
 	// Leave empty for local mode (dashboard manages child processes directly).
@@ -582,6 +713,135 @@ func main() {
 		nodeID := r.URL.Path[len("/api/chaos/stop/"):]
 		mgr.StopChaosProxy(nodeID)
 		json.NewEncoder(w).Encode(map[string]string{"status": "proxy_stopped", "node": nodeID})
+	})
+
+	// POST /api/chaos/netem/{nodeID}?delay=500&loss=30&jitter=10
+	// Applies tc/netem network impairment (real latency/packet loss at kernel level)
+	mux.HandleFunc("/api/chaos/netem/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		nodeID := r.URL.Path[len("/api/chaos/netem/"):]
+		delay := r.URL.Query().Get("delay")
+		loss := r.URL.Query().Get("loss")
+		jitter := r.URL.Query().Get("jitter")
+
+		if err := mgr.ApplyNetem(nodeID, delay, loss, jitter); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		desc := ""
+		if delay != "" {
+			desc += "delay=" + delay + "ms"
+			if jitter != "" {
+				desc += "±" + jitter + "ms"
+			}
+		}
+		if loss != "" {
+			if desc != "" {
+				desc += ", "
+			}
+			desc += "loss=" + loss + "%"
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "netem_applied", "node": nodeID, "params": desc})
+	})
+
+	// POST /api/chaos/unnetem/{nodeID} — remove tc/netem rules
+	mux.HandleFunc("/api/chaos/unnetem/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		nodeID := r.URL.Path[len("/api/chaos/unnetem/"):]
+		if err := mgr.RemoveNetem(nodeID); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "netem_removed", "node": nodeID})
+	})
+
+	// KV Operations API - SET/GET/DELETE via dashboard (uses gRPC to leader)
+	mux.HandleFunc("/api/kv/set", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		key := r.URL.Query().Get("key")
+		val := r.URL.Query().Get("val")
+		addr := r.URL.Query().Get("addr")
+		if key == "" || val == "" || addr == "" {
+			http.Error(w, "key, val, and addr are required", 400)
+			return
+		}
+		result, err := mgr.DirectKVSet(addr, key, val)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": result})
+	})
+
+	mux.HandleFunc("/api/kv/get", func(w http.ResponseWriter, r *http.Request) {
+		key := r.URL.Query().Get("key")
+		addr := r.URL.Query().Get("addr")
+		if key == "" || addr == "" {
+			http.Error(w, "key and addr are required", 400)
+			return
+		}
+		value, found, err := mgr.DirectKVGet(addr, key)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"found": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"found": found, "value": value})
+	})
+
+	mux.HandleFunc("/api/kv/delete", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		key := r.URL.Query().Get("key")
+		addr := r.URL.Query().Get("addr")
+		if key == "" || addr == "" {
+			http.Error(w, "key and addr are required", 400)
+			return
+		}
+		result, err := mgr.DirectKVDelete(addr, key)
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": result})
+	})
+
+	// POST /api/partition/{nodeID} — iptables-based true network partition (drops Raft traffic)
+	mux.HandleFunc("/api/partition/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		nodeID := r.URL.Path[len("/api/partition/"):]
+		if err := mgr.PartitionNode(nodeID); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "partitioned", "node": nodeID})
+	})
+
+	// POST /api/unpartition/{nodeID} — heal iptables partition
+	mux.HandleFunc("/api/unpartition/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", 405)
+			return
+		}
+		nodeID := r.URL.Path[len("/api/unpartition/"):]
+		if err := mgr.UnpartitionNode(nodeID); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "unpartitioned", "node": nodeID})
 	})
 
 	// POST /api/pause/{nodeID} — SIGSTOP: simulate network partition

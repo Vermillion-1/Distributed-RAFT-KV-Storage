@@ -79,7 +79,8 @@ GOOS=linux GOARCH=amd64 go build -o "$BIN_DIR/kv-client"    ./cmd/client/
 GOOS=linux GOARCH=amd64 go build -o "$BIN_DIR/kv-chaos"     ./cmd/chaos/
 GOOS=linux GOARCH=amd64 go build -o "$BIN_DIR/kv-dashboard" ./cmd/dashboard/
 GOOS=linux GOARCH=amd64 go build -o "$BIN_DIR/node-agent"   ./cmd/agent/
-echo "✅ Binaries built: $(ls "$BIN_DIR" | tr '\n' ' ')"
+tar -czf "$BIN_DIR/binaries.tar.gz" -C "$BIN_DIR" kv-store kv-client kv-chaos kv-dashboard node-agent
+echo "✅ Binaries built and bundled: binaries.tar.gz"
 
 # ── Step 4: Get internal IPs ──────────────────────────────────────────────────
 echo ""
@@ -106,18 +107,26 @@ echo "✅ Cleanup complete."
 # ── Step 5: SCP binaries to each VM ──────────────────────────────────────────
 echo ""
 echo "📦 Uploading binaries to VMs..."
+SCP_FLAGS="--scp-flag=-oServerAliveInterval=30 --scp-flag=-oServerAliveCountMax=5"
 for i in $(seq 0 $((NODE_COUNT - 1))); do
   echo "  → ${NODES[$i]}..."
-  gcloud compute scp "$BIN_DIR"/* "${NODES[$i]}":~/ \
+  gcloud compute scp "$BIN_DIR/binaries.tar.gz" "${NODES[$i]}":~/ \
     --zone="${ZONES[$i]}" \
+    $SCP_FLAGS \
     --quiet
   
-  # node0 needs the dashboard HTML file and the verify scripts
+  # Extract binaries
+  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
+    "tar -xzf ~/binaries.tar.gz -C ~/ && rm ~/binaries.tar.gz"
+  
+  # Each node needs the dashboard HTML file for decentralized dashboard (S5a)
+  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- "mkdir -p ~/cmd/dashboard"
+  gcloud compute scp cmd/dashboard/index.html "${NODES[$i]}":~/cmd/dashboard/ \
+    --zone="${ZONES[$i]}" \
+    --quiet
+
+  # Only node0 needs the verify scripts (for running tests)
   if [ "$i" -eq 0 ]; then
-    gcloud compute ssh "${NODES[0]}" --zone="${ZONES[0]}" --quiet -- "mkdir -p ~/cmd/dashboard"
-    gcloud compute scp cmd/dashboard/index.html "${NODES[0]}":~/cmd/dashboard/ \
-      --zone="${ZONES[0]}" \
-      --quiet
     gcloud compute scp verify.sh verify_phase2.sh verify_phase3.sh verify_phase4.sh GCP_verify_phase1.sh GCP_verify_phase2.sh GCP_verify_phase3.sh GCP_verify_phase4.sh "${NODES[0]}":~/ \
       --zone="${ZONES[0]}" \
       --quiet
@@ -198,19 +207,23 @@ if [ "$NODE_COUNT" -gt 1 ]; then
   done
 fi
 
-# ── Step 9: Start dashboard on node0 ─────────────────────────────────────────
+# ── Step 9: Start dashboard on ALL nodes (Decentralized Dashboard - S5a) ─────
 echo ""
-echo "📊 Starting kv-dashboard on node0..."
+echo "📊 Starting kv-dashboard on ALL nodes (decentralized mode)..."
 AGENT_ADDRS=""
 for i in $(seq 0 $((NODE_COUNT - 1))); do
   AGENT_ADDRS+="${NODES[$i]}=${INT_IPS[$i]}:${AGENT_PORT},"
 done
 AGENT_ADDRS=${AGENT_ADDRS%,} # trim trailing comma
 
-gcloud compute ssh "${NODES[0]}" --zone="${ZONES[0]}" --quiet -- \
-  "nohup ./kv-dashboard -nodes=${NODE_COUNT} -port=${DASHBOARD_PORT} -agent-addrs='${AGENT_ADDRS}' > dashboard.log 2>&1 </dev/null & sleep 1"
+# Start dashboard on each node so the UI is available from any node
+for i in $(seq 0 $((NODE_COUNT - 1))); do
+  echo "  Starting dashboard on ${NODES[$i]}..."
+  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
+    "nohup ./kv-dashboard -nodes=${NODE_COUNT} -port=${DASHBOARD_PORT} -agent-addrs='${AGENT_ADDRS}' > dashboard.log 2>&1 </dev/null & sleep 1"
+done
 sleep 2
-echo "✅ Dashboard started."
+echo "✅ Dashboard started on all nodes."
 
 # ── Step 10: Print cluster IP table ──────────────────────────────────────────
 echo ""
@@ -224,5 +237,8 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
   echo "           Raft=:${RAFT_PORT}  gRPC=:${GRPC_PORT}  Agent=:${AGENT_PORT}"
 done
 echo ""
-echo " Dashboard: http://${EXT_IPS[0]}:${DASHBOARD_PORT}"
+echo " 📊 Dashboard (available on ANY node):"
+for i in $(seq 0 $((NODE_COUNT - 1))); do
+  echo "   http://${EXT_IPS[$i]}:${DASHBOARD_PORT}  (${NODES[$i]})"
+done
 echo "═══════════════════════════════════════════════════════════════"

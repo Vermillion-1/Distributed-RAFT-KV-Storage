@@ -345,6 +345,9 @@ func (n *Node) Health(ctx context.Context, req *pb.HealthRequest) (*pb.HealthRes
 	var appliedIndex uint64
 	fmt.Sscanf(stats["applied_index"], "%d", &appliedIndex)
 
+	var term uint64
+	fmt.Sscanf(stats["term"], "%d", &term)
+
 	configFuture := n.raft.GetConfiguration()
 	var numPeers uint32
 	if configFuture.Error() == nil {
@@ -357,5 +360,6 @@ func (n *Node) Health(ctx context.Context, req *pb.HealthRequest) (*pb.HealthRes
 		LeaderAddr:   grpcAddr,
 		AppliedIndex: appliedIndex,
 		NumPeers:     numPeers,
+		Term:         term,
 	}, nil
 }

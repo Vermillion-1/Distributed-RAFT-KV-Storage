@@ -27,11 +27,12 @@ import (
 )
 
 var (
-	mu       sync.Mutex
+	mu        sync.Mutex
 	childProc *os.Process // owned by the agent; signalled for kill/pause/resume
-	kvBin    string
-	kvArgs   []string
-	raftPort string // parsed from -kv-args for B3 iptables rules
+	kvBin     string
+	kvArgs    []string
+	raftPort  string // parsed from -kv-args for B3 iptables rules
+	netIface  string // network interface for tc netem (e.g., "eth0")
 )
 
 // spawnKV starts kv-store as a child process.
@@ -65,13 +66,15 @@ func alive(p *os.Process) bool {
 }
 
 func main() {
-	kvBinFlag  := flag.String("kv-bin", "./kv-store", "Path to the kv-store binary")
+	kvBinFlag := flag.String("kv-bin", "./kv-store", "Path to the kv-store binary")
 	kvArgsFlag := flag.String("kv-args", "", "Space-separated args to pass to kv-store")
-	port       := flag.Int("port", 9000, "Agent HTTP port")
+	port := flag.Int("port", 9000, "Agent HTTP port")
+	netIfaceFlag := flag.String("iface", "eth0", "Network interface for tc netem (e.g., eth0)")
 	flag.Parse()
 
-	kvBin  = *kvBinFlag
+	kvBin = *kvBinFlag
 	kvArgs = strings.Fields(*kvArgsFlag)
+	netIface = *netIfaceFlag
 
 	// B3: auto-parse raft port from "-raft=<ip>:<port>" in kv-args
 	// Used by the /partition and /unpartition iptables handlers.
@@ -211,7 +214,7 @@ func main() {
 			http.Error(w, "raft port not parsed from -kv-args; cannot partition", http.StatusBadRequest)
 			return
 		}
-		inCmd  := exec.Command("sudo", "iptables", "-I", "INPUT",  "-p", "tcp", "--dport", raftPort, "-j", "DROP")
+		inCmd := exec.Command("sudo", "iptables", "-I", "INPUT", "-p", "tcp", "--dport", raftPort, "-j", "DROP")
 		outCmd := exec.Command("sudo", "iptables", "-I", "OUTPUT", "-p", "tcp", "--sport", raftPort, "-j", "DROP")
 		if out, err := inCmd.CombinedOutput(); err != nil {
 			http.Error(w, fmt.Sprintf("iptables INPUT failed: %v — %s", err, out), http.StatusInternalServerError)
@@ -235,7 +238,7 @@ func main() {
 			http.Error(w, "raft port not parsed from -kv-args", http.StatusBadRequest)
 			return
 		}
-		inCmd  := exec.Command("sudo", "iptables", "-D", "INPUT",  "-p", "tcp", "--dport", raftPort, "-j", "DROP")
+		inCmd := exec.Command("sudo", "iptables", "-D", "INPUT", "-p", "tcp", "--dport", raftPort, "-j", "DROP")
 		outCmd := exec.Command("sudo", "iptables", "-D", "OUTPUT", "-p", "tcp", "--sport", raftPort, "-j", "DROP")
 		// -D returns non-zero if the rule didn't exist — not fatal, log and continue
 		if out, err := inCmd.CombinedOutput(); err != nil {
@@ -245,6 +248,83 @@ func main() {
 			log.Printf("[agent] iptables -D OUTPUT warning: %v — %s", err, out)
 		}
 		log.Printf("[agent] iptables DROP removed on Raft port %s (partition healed)", raftPort)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// POST /netem?delay=500&loss=30&jitter=10 — apply network impairment via tc/netem
+	// delay: base delay in milliseconds (e.g., "500" = 500ms)
+	// jitter: optional random variation in ms (e.g., "10" = ±10ms)
+	// loss: packet loss percentage (e.g., "30" = 30%)
+	// Examples:
+	//   /netem?delay=500          → 500ms constant delay
+	//   /netem?delay=500&jitter=10 → 500ms ± 10ms jitter
+	//   /netem?delay=500&loss=30  → 500ms delay + 30% packet loss
+	mux.HandleFunc("/netem", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		delayMs := r.URL.Query().Get("delay")
+		jitterMs := r.URL.Query().Get("jitter")
+		lossPct := r.URL.Query().Get("loss")
+
+		if delayMs == "" && lossPct == "" {
+			http.Error(w, "must specify delay and/or loss parameter", http.StatusBadRequest)
+			return
+		}
+
+		// First, delete any existing qdisc rule
+		delCmd := exec.Command("sudo", "tc", "qdisc", "del", "dev", netIface, "root")
+		delCmd.Run() // ignore error if none exists
+
+		// Build the netem command
+		args := []string{"tc", "qdisc", "add", "dev", netIface, "root", "netem"}
+		if delayMs != "" {
+			if jitterMs != "" {
+				args = append(args, "delay", delayMs+"ms", jitterMs+"ms")
+			} else {
+				args = append(args, "delay", delayMs+"ms")
+			}
+		}
+		if lossPct != "" {
+			args = append(args, "loss", lossPct+"%")
+		}
+
+		cmd := exec.Command("sudo", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			http.Error(w, fmt.Sprintf("tc netem failed: %v — %s", err, out), http.StatusInternalServerError)
+			return
+		}
+
+		desc := ""
+		if delayMs != "" {
+			desc += "delay=" + delayMs + "ms"
+			if jitterMs != "" {
+				desc += "±" + jitterMs + "ms"
+			}
+		}
+		if lossPct != "" {
+			if desc != "" {
+				desc += ", "
+			}
+			desc += "loss=" + lossPct + "%"
+		}
+		log.Printf("[agent] tc netem applied on %s: %s", netIface, desc)
+		w.WriteHeader(http.StatusOK)
+	})
+
+	// POST /unnetem — remove all tc netem rules and restore normal networking
+	mux.HandleFunc("/unnetem", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "POST only", http.StatusMethodNotAllowed)
+			return
+		}
+		cmd := exec.Command("sudo", "tc", "qdisc", "del", "dev", netIface, "root")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			// Not an error if no qdisc exists
+			log.Printf("[agent] tc qdisc del warning: %v — %s", err, out)
+		}
+		log.Printf("[agent] tc netem removed on %s (network normal)", netIface)
 		w.WriteHeader(http.StatusOK)
 	})
 

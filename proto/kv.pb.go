@@ -513,6 +513,7 @@ type HealthResponse struct {
 	LeaderAddr    string                 `protobuf:"bytes,3,opt,name=leader_addr,json=leaderAddr,proto3" json:"leader_addr,omitempty"`        // Current leader's address
 	AppliedIndex  uint64                 `protobuf:"varint,4,opt,name=applied_index,json=appliedIndex,proto3" json:"applied_index,omitempty"` // Last applied Raft log index
 	NumPeers      uint32                 `protobuf:"varint,5,opt,name=num_peers,json=numPeers,proto3" json:"num_peers,omitempty"`             // Number of peers in the cluster
+	Term          uint64                 `protobuf:"varint,6,opt,name=term,proto3" json:"term,omitempty"`                                     // Current Raft term number
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -582,6 +583,13 @@ func (x *HealthResponse) GetNumPeers() uint32 {
 	return 0
 }
 
+func (x *HealthResponse) GetTerm() uint64 {
+	if x != nil {
+		return x.Term
+	}
+	return 0
+}
+
 var File_proto_kv_proto protoreflect.FileDescriptor
 
 const file_proto_kv_proto_rawDesc = "" +
@@ -621,14 +629,15 @@ const file_proto_kv_proto_rawDesc = "" +
 	"\asuccess\x18\x01 \x01(\bR\asuccess\x12\x1f\n" +
 	"\vleader_addr\x18\x02 \x01(\tR\n" +
 	"leaderAddr\"\x0f\n" +
-	"\rHealthRequest\"\xa2\x01\n" +
+	"\rHealthRequest\"\xb6\x01\n" +
 	"\x0eHealthResponse\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x14\n" +
 	"\x05state\x18\x02 \x01(\tR\x05state\x12\x1f\n" +
 	"\vleader_addr\x18\x03 \x01(\tR\n" +
 	"leaderAddr\x12#\n" +
 	"\rapplied_index\x18\x04 \x01(\x04R\fappliedIndex\x12\x1b\n" +
-	"\tnum_peers\x18\x05 \x01(\rR\bnumPeers2\x84\x02\n" +
+	"\tnum_peers\x18\x05 \x01(\rR\bnumPeers\x12\x12\n" +
+	"\x04term\x18\x06 \x01(\x04R\x04term2\x84\x02\n" +
 	"\aKVStore\x12,\n" +
 	"\x03Get\x12\x11.store.GetRequest\x1a\x12.store.GetResponse\x12,\n" +
 	"\x03Set\x12\x11.store.SetRequest\x1a\x12.store.SetResponse\x125\n" +
