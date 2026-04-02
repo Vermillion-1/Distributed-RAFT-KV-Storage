@@ -20,7 +20,7 @@ We solve the "Chaos vs. Control" problem by separating our networking onto two l
 2.  **Port 50051 (Client gRPC):** This is the user-facing API. It provides a clean gRPC interface for `Get`, `Set`, and `Delete`.
 
 ### Reasoning & Defense (The Prof's Question):
-*   **Why separate?** We allow the **Chaos Proxy** to intentionally delay or drop traffic on port 50051 to simulate a slow application layer *without* breaking the underlying Raft heartbeats on port 12000. This is a crucial distinction between "Application-Level Partition" and "Infrastructure-Level Partition."
+*   **Why separate?** The **Sidecar Agent** can inject tc netem delays on the full network interface (affecting client gRPC traffic on port 50051) *without* breaking the underlying Raft heartbeats on port 12000. This is a crucial distinction between "Application-Level Partition" and "Infrastructure-Level Partition."
 
 ---
 

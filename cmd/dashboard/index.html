@@ -449,7 +449,6 @@
                 <button class="btn" id="btn-stop-chaos">✅ Stop Chaos</button>
                 <button class="btn partition" id="btn-pause-node">⏸ Pause Node</button>
                 <button class="btn success" id="btn-resume-node">▶ Resume Node</button>
-                <button class="btn purple" id="btn-run-tests">🧪 Run All Tests</button>
                 <button class="btn" id="btn-refresh-log">📄 View Node Log</button>
             </div>
 
@@ -833,20 +832,6 @@
                 out.scrollTop = out.scrollHeight;
             } catch (e) {
                 document.getElementById('node-log-output').textContent = 'Failed: ' + e.message;
-            }
-        });
-
-        document.getElementById('btn-run-tests').addEventListener('click', async () => {
-            appendEvent({ time: ts(), level: 'info', message: '🧪 Running chaos test suite…' });
-            try {
-                const res = await fetch('/api/run-tests', { method: 'POST' });
-                const body = await res.json().catch(() => ({}));
-                appendEvent({
-                    time: ts(), level: body.passed ? 'success' : 'error',
-                    message: body.passed ? '✅ All tests PASSED' : '❌ Some tests FAILED'
-                });
-            } catch (e) {
-                appendEvent({ time: ts(), level: 'error', message: '❌ Test run error: ' + e.message });
             }
         });
 

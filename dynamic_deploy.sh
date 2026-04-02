@@ -79,7 +79,7 @@ GOOS=linux GOARCH=amd64 go build -o "$BIN_DIR/kv-client"    ./cmd/client/
 GOOS=linux GOARCH=amd64 go build -o "$BIN_DIR/kv-chaos"     ./cmd/chaos/
 GOOS=linux GOARCH=amd64 go build -o "$BIN_DIR/kv-dashboard" ./cmd/dashboard/
 GOOS=linux GOARCH=amd64 go build -o "$BIN_DIR/node-agent"   ./cmd/agent/
-tar -czf "$BIN_DIR/binaries.tar.gz" -C "$BIN_DIR" kv-store kv-client kv-chaos kv-dashboard node-agent
+COPYFILE_DISABLE=1 tar -czf "$BIN_DIR/binaries.tar.gz" -C "$BIN_DIR" kv-store kv-client kv-chaos kv-dashboard node-agent
 echo "✅ Binaries built and bundled: binaries.tar.gz"
 
 # ── Step 4: Get internal IPs ──────────────────────────────────────────────────
@@ -112,7 +112,7 @@ done
 echo ""
 echo "🧹 Cleaning up any existing cluster processes and old data..."
 for i in $(seq 0 $((NODE_COUNT - 1))); do
-  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
+  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --ssh-flag="-T" --quiet -- \
     "pkill -f '[n]ode-agent|[k]v-store|[k]v-dashboard|[k]v-chaos' || true; sudo rm -rf /data/raft-kv/*"
 done
 echo "✅ Cleanup complete."
@@ -129,15 +129,9 @@ for i in $(seq 0 $((NODE_COUNT - 1))); do
     --quiet
   
   # Extract binaries
-  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
+  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --ssh-flag="-T" --quiet -- \
     "tar -xzf ~/binaries.tar.gz -C ~/ && rm ~/binaries.tar.gz"
   
-  # Each node needs the dashboard HTML file for decentralized dashboard (S5a)
-  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- "mkdir -p ~/cmd/dashboard"
-  gcloud compute scp cmd/dashboard/index.html "${NODES[$i]}":~/cmd/dashboard/ \
-    --zone="${ZONES[$i]}" \
-    --quiet
-
   # Only node0 needs the verify scripts (for running tests)
   if [ "$i" -eq 0 ]; then
     gcloud compute scp verify.sh verify_phase2.sh verify_phase3.sh verify_phase4.sh \
@@ -154,7 +148,7 @@ echo "✅ Binaries uploaded."
 echo ""
 echo "🔑 Setting execute permissions on each VM..."
 for i in $(seq 0 $((NODE_COUNT - 1))); do
-  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
+  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --ssh-flag="-T" --quiet -- \
     "chmod +x ~/node-agent ~/kv-store ~/kv-dashboard ~/kv-chaos ~/kv-client; find ~/ -maxdepth 1 -name '*.sh' -exec chmod +x {} +"
 done
 echo "✅ Permissions set."
@@ -163,7 +157,7 @@ echo "✅ Permissions set."
 echo ""
 echo "💾 Creating data directory on each VM..."
 for i in $(seq 0 $((NODE_COUNT - 1))); do
-  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
+  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --ssh-flag="-T" --quiet -- \
     "sudo mkdir -p /data/raft-kv && sudo chmod 777 /data/raft-kv"
 done
 echo "✅ Data directories ready."
@@ -179,7 +173,7 @@ for j in $(seq 1 $((NODE_COUNT - 1))); do
   PEER_ADDRS0+="${INT_IPS[$j]}:$((12000 + j)),"
 done
 PEER_ADDRS0="${PEER_ADDRS0%,}"
-gcloud compute ssh "${NODES[0]}" --zone="${ZONES[0]}" --quiet -- \
+gcloud compute ssh "${NODES[0]}" --zone="${ZONES[0]}" --ssh-flag="-T" --quiet -- \
   "nohup ./node-agent -kv-bin=./kv-store -kv-args='${KV_ARGS0}' -peer-raft-addrs='${PEER_ADDRS0}' > agent.log 2>&1 </dev/null & sleep 1"
 
 # Poll node0 /health until alive (up to 60s)
@@ -213,7 +207,7 @@ if [ "$NODE_COUNT" -gt 1 ]; then
     done
     PEER_ADDRS="${PEER_ADDRS%,}"
     echo "  Starting ${NODES[$i]}..."
-    gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
+    gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --ssh-flag="-T" --quiet -- \
       "nohup ./node-agent -kv-bin=./kv-store -kv-args='${KV_ARGS}' -peer-raft-addrs='${PEER_ADDRS}' > agent.log 2>&1 </dev/null & sleep 1"
   done
 
@@ -249,13 +243,39 @@ AGENT_ADDRS=${AGENT_ADDRS%,} # trim trailing comma
 # Start dashboard on each node so the UI is available from any node
 for i in $(seq 0 $((NODE_COUNT - 1))); do
   echo "  Starting dashboard on ${NODES[$i]}..."
-  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
+  gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --ssh-flag="-T" --quiet -- \
     "nohup ./kv-dashboard -nodes=${NODE_COUNT} -port=${DASHBOARD_PORT} -agent-addrs='${AGENT_ADDRS}' > dashboard.log 2>&1 </dev/null & sleep 1"
 done
 sleep 2
 echo "✅ Dashboard started on all nodes."
 
-# ── Step 10: Print cluster IP table ──────────────────────────────────────────
+# ── Step 10: Wait for Raft leader election ────────────────────────────────────
+echo ""
+echo "🗳  Waiting for Raft leader election..."
+DEADLINE=$((SECONDS + 30))
+until curl -sf "http://${EXT_IPS[0]}:${DASHBOARD_PORT}/api/cluster" 2>/dev/null \
+      | python3 -c "import sys,json; d=json.load(sys.stdin); \
+        leaders=[n for n in d['nodes'] if n.get('state')=='Leader']; \
+        exit(0 if leaders else 1)"; do
+  [ $SECONDS -ge $DEADLINE ] && { echo "❌ No leader elected after 30s"; exit 1; }
+  echo "    ...waiting for leader (${SECONDS}s elapsed)"; sleep 3
+done
+echo "✅ Raft leader elected — cluster fully operational."
+
+# ── Step 11: End-to-end smoke test ───────────────────────────────────────────
+echo ""
+echo "🧪 Smoke test: writing + reading a key..."
+GRPC_ADDRS=""
+for i in $(seq 0 $((NODE_COUNT - 1))); do
+  GRPC_ADDRS+="${INT_IPS[$i]}:$((50051 + i)),"
+done
+GRPC_ADDRS="${GRPC_ADDRS%,}"
+gcloud compute ssh "${NODES[0]}" --zone="${ZONES[0]}" --ssh-flag="-T" --quiet -- \
+  "./kv-client -addrs='${GRPC_ADDRS}' -cmd set -key deploy_probe -val ok && \
+   ./kv-client -addrs='${GRPC_ADDRS}' -cmd get -key deploy_probe | grep -q 'ok' && \
+   echo '✅ Smoke test passed' || echo '❌ Smoke test FAILED'"
+
+# ── Step 12: Print cluster IP table ──────────────────────────────────────────
 echo ""
 echo "═══════════════════════════════════════════════════════════════"
 echo " Cluster Ready (${NODE_COUNT} Nodes)"

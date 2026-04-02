@@ -35,3 +35,8 @@ vendor/
 # ─── Test Artifacts ──────────────────────────────────────────────
 # Temporary test output files
 /tmp/verify_*.txt
+
+# ─── Temp Files ─────────────────────────────────────────────────
+# Do not commit files starting with temp
+temp*
+

@@ -1,9 +1,30 @@
-# Changelog — v1.2 Bug Fix Session
-**Date:** 2026-03-31
-**Branch/State:** Post-GCP-verification, pre-presentation bug fixes
-**Session goal:** Harden the implementation against demo-breaking failures identified in code audit.
+# Changelog — v1.2
 
 ---
+
+## v1.2.3 — Deploy Verification (2026-04-01, Session 4)
+
+| ID | Change | File |
+|----|--------|------|
+| FEAT-1 | Added Step 10: polls `/api/cluster` on node0's dashboard every 3s (30s timeout) until a node reports `state == "Leader"` — deploy now fails fast instead of silently handing off a leaderless cluster | `dynamic_deploy.sh` |
+| FEAT-3 | Added Step 11: SSHes to node0 and runs `kv-client set deploy_probe=ok` + `kv-client get` over internal gRPC addresses — end-to-end proof that the full write path (client → gRPC → Raft → FSM → response) is operational | `dynamic_deploy.sh` |
+
+---
+
+## v1.2.2 — Deploy Hardening & Terminology Cleanup (2026-04-01, Session 3)
+
+| ID | Change | File |
+|----|--------|------|
+| E-1 | Prepended `COPYFILE_DISABLE=1` to `tar -czf` — suppresses macOS extended attribute warnings on GCP VMs | `dynamic_deploy.sh` |
+| E-2 | Added `--ssh-flag="-T"` to all 7 non-interactive `gcloud compute ssh` calls — eliminates "Pseudo-terminal will not be allocated" noise | `dynamic_deploy.sh` |
+| E-3 | Removed dead code: `mkdir -p ~/cmd/dashboard` + `scp index.html` — `index.html` is embedded via `go:embed` since v1.2 and the file copy was a no-op | `dynamic_deploy.sh` |
+| E-4 | Updated failure model table and project structure comment: `kv-chaos TCP fault proxy` → deprecated; Sidecar Agent is the actual fault injection mechanism | `README.md` |
+| E-5 | Replaced "Chaos Proxy" with "Sidecar Agent" in dual-port networking rationale | `docs/ARCHITECTURE.md` |
+
+---
+
+## v1.2.0 — Bug Fix Session (2026-03-31)
+**Branch/State:** Post-GCP-verification, pre-presentation bug fixes
 
 ## Summary of Changes
 
@@ -254,7 +275,7 @@ All changes are fully backward compatible:
 
 ---
 
-## v1.2.1 — Phase Script Hardening Session
+## v1.2.1 — Phase Script Hardening (2026-03-31)
 **Date:** 2026-03-31
 **Session goal:** Patch broken tests, add missing critical tests grounded in lecture material (03-756-FT.pdf).
 

@@ -948,40 +948,6 @@ func main() {
 		w.Write(data)
 	})
 
-	// POST /api/run-tests → runs the full chaos test suite
-	mux.HandleFunc("/api/run-tests", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "POST only", 405)
-			return
-		}
-		mgr.log("info", "🧪 Starting chaos test suite via run_chaos_test.sh...")
-		mgr.StopAll() // stop managed cluster so test script can start fresh
-
-		cmd := exec.Command("bash", binDir+"/run_chaos_test.sh")
-		cmd.Dir = binDir
-		out, err := cmd.CombinedOutput()
-		passed := err == nil
-
-		outStr := string(out)
-		if passed {
-			mgr.log("success", "✅ All chaos tests PASSED")
-		} else {
-			mgr.log("error", "❌ Chaos tests FAILED: "+err.Error())
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"passed": passed,
-			"output": outStr,
-		})
-
-		// Restart cluster after tests
-		go func() {
-			time.Sleep(2 * time.Second)
-			mgr.StartAll()
-		}()
-	})
-
 	addr := fmt.Sprintf(":%d", *port)
 	log.Printf("🚀 Chaos Dashboard running at http://localhost%s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {

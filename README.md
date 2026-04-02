@@ -73,8 +73,8 @@ open http://localhost:8080
 |---|---|---|
 | **Crash / Fail-stop** | `SIGKILL` → `/api/kill` | ✅ Implemented |
 | **Network Partition** | `SIGSTOP` → `/api/pause` | ✅ Implemented |
-| **Receive Omission** | `kv-chaos` drops initial TCP connection | ✅ Implemented |
-| **Send Omission / Latency** | `kv-chaos` proxy jitter/delay | ✅ Implemented |
+| **Receive Omission** | Sidecar Agent bidirectional `iptables DROP` | ✅ Implemented |
+| **Send Omission / Latency** | Sidecar Agent `tc netem` delay on full NIC | ✅ Implemented |
 | **Slow Node (Resource)** | Pending Phase 3 script | 🔄 Next |
 | **Durability (Total Wipe)** | Pending Phase 4 script | 🔄 Next |
 
@@ -91,7 +91,7 @@ store/
 ├── proto/               # 🔵 Protobuf service definitions
 ├── cmd/
 │   ├── client/          # 🟣 kv-client CLI tool
-│   ├── chaos/           # 🟣 kv-chaos TCP fault proxy
+│   ├── chaos/           # 🟣 kv-chaos (deprecated — superseded by Sidecar Agent in v1.2)
 │   └── dashboard/       # 🟣 Dashboard HTTP server + frontend
 ├── docs/                # 📚 All documentation & Sub-READMEs
 ├── verify.sh            # 🧪 Phase 1 tests script

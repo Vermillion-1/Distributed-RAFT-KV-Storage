@@ -18,106 +18,145 @@
 
 ---
 
-## D1 — System Architecture Diagram
+## D1 — System Architecture Diagram (3-Node, Layered)
 **Used in:** Slide 2 (primary visual) + Report system design section
 **Placement:** Full-width, center of Slide 2. In report: half-page width, left-aligned, caption below.
-**Caption:** *"Fig. 1: Five-replica consensus group on GCP. Each VM runs a Raft Replica (kv-store) and a Sidecar Agent (node-agent). All replicas are peers — the Leader role is elected by Raft and can move to any node."*
+**Caption:** *"Fig. 1: Three-replica consensus group on GCP. Each VM runs a kv-store Raft Replica (gRPC → Raft Engine → FSM → BoltDB) and an independent Sidecar Agent for chaos injection. The Leader role is elected by Raft and can move to any replica."*
+
+### Component Inventory
+
+| Layer | Component | Port | Source |
+|-------|-----------|------|--------|
+| gRPC Server | Get · Set · Delete · Join · Health | `:50051+i` | `server/node.go` |
+| Raft Engine | Leader Election · AppendEntries · Heartbeat | TCP `:12000+i` | HashiCorp Raft v1.7.3 |
+| FSM | KV Map · Idempotency Table · Peer Registry | — | `server/fsm.go` |
+| BoltDB | Raft Log (WAL) · Stable Store · Snapshot | — | `go.etcd.io/bbolt` |
+| Sidecar Agent | SIGKILL · SIGSTOP · iptables · tc netem | HTTP `:9000` | `cmd/agent/main.go` |
+| Dashboard | Web UI · Chaos Orchestrator · Health Poller | HTTP `:8080` | `cmd/dashboard/main.go` |
+| Smart Client | Multi-addr failover · Leader redirect · Exactly-once | — | `cmd/client/main.go` |
 
 ### Mermaid Code
 
 ```mermaid
 graph TD
-    Client(["🖥️ kv-client\n(Smart Client)"])
+    Client(["🖥️ kv-client\nSmart Client\nMulti-addr failover · Exactly-once"])
+    Dash(["📊 kv-dashboard\nWeb UI · Chaos Orchestrator\n:8080"])
 
-    subgraph GCP["☁️ GCP Project — us-central1"]
-        subgraph ZoneA["Zone: us-central1-a"]
-            subgraph VM0["GCP VM — node0"]
-                KV0["kv-store\nRaft Replica\ngRPC :50051 · Raft :12000"]
-                AG0["node-agent\nSidecar Agent\nHTTP :9000"]
+    subgraph GCP["☁️ GCP Cluster — 3 VMs (us-central1)"]
+        subgraph VM0["VM: node0  —  Follower"]
+            direction TB
+            subgraph KV0["kv-store · Raft Replica"]
+                G0["gRPC Server :50051\nGet · Set · Delete · Join · Health"]
+                R0["Raft Engine :12000\nLeader Election · AppendEntries · Heartbeat"]
+                F0["FSM — Replicated State Machine\nKV Map · Idempotency Table · Peer Registry"]
+                B0["BoltDB Storage\nLog WAL · Stable Store · Snapshot"]
+                G0 --> R0 --> F0 --> B0
             end
-            subgraph VM1["GCP VM — node1"]
-                KV1["kv-store\nRaft Replica\ngRPC :50052 · Raft :12001"]
-                AG1["node-agent\nSidecar Agent\nHTTP :9001"]
-            end
-            subgraph VM2["GCP VM — node2"]
-                KV2["kv-store\nRaft Replica\ngRPC :50053 · Raft :12002"]
-                AG2["node-agent\nSidecar Agent\nHTTP :9002"]
-            end
+            A0["🔧 Sidecar Agent :9000\nSIGKILL · SIGSTOP · iptables · tc netem"]
+            A0 -.->|"controls"| KV0
         end
-        subgraph ZoneC["Zone: us-central1-c"]
-            subgraph VM3["GCP VM — node3"]
-                KV3["kv-store\nRaft Replica\ngRPC :50054 · Raft :12003"]
-                AG3["node-agent\nSidecar Agent\nHTTP :9003"]
+
+        subgraph VM1["VM: node1  —  LEADER 👑"]
+            direction TB
+            subgraph KV1["kv-store · Raft Replica"]
+                G1["gRPC Server :50052\nGet · Set · Delete · Join · Health"]
+                R1["Raft Engine :12001\nLeader Election · AppendEntries · Heartbeat"]
+                F1["FSM — Replicated State Machine\nKV Map · Idempotency Table · Peer Registry"]
+                B1["BoltDB Storage\nLog WAL · Stable Store · Snapshot"]
+                G1 --> R1 --> F1 --> B1
             end
-            subgraph VM4["GCP VM — node4"]
-                KV4["kv-store\nRaft Replica\ngRPC :50055 · Raft :12004"]
-                AG4["node-agent\nSidecar Agent\nHTTP :9004"]
-            end
+            A1["🔧 Sidecar Agent :9000\nSIGKILL · SIGSTOP · iptables · tc netem"]
+            A1 -.->|"controls"| KV1
         end
+
+        subgraph VM2["VM: node2  —  Follower"]
+            direction TB
+            subgraph KV2["kv-store · Raft Replica"]
+                G2["gRPC Server :50053\nGet · Set · Delete · Join · Health"]
+                R2["Raft Engine :12002\nLeader Election · AppendEntries · Heartbeat"]
+                F2["FSM — Replicated State Machine\nKV Map · Idempotency Table · Peer Registry"]
+                B2["BoltDB Storage\nLog WAL · Stable Store · Snapshot"]
+                G2 --> R2 --> F2 --> B2
+            end
+            A2["🔧 Sidecar Agent :9000\nSIGKILL · SIGSTOP · iptables · tc netem"]
+            A2 -.->|"controls"| KV2
+        end
+
+        R0 <-->|"Raft TCP :12000↔:12001\nAppendEntries · Vote"| R1
+        R0 <-->|"Raft TCP :12000↔:12002"| R2
+        R1 <-->|"Raft TCP :12001↔:12002"| R2
     end
 
-    %% Client connects to any replica (auto-redirects to leader)
-    Client -->|"gRPC · Get/Set/Delete\nauto-redirect to Leader"| KV0
+    Client -->|"gRPC → auto-redirect to Leader\nclient_id + seq_num (exactly-once)"| G0
+    Client -->|"gRPC"| G1
+    Client -->|"gRPC"| G2
 
-    %% Raft consensus traffic between all replicas
-    KV0 <-->|"Raft TCP\nAppendEntries · Heartbeat · Vote"| KV1
-    KV0 <-->|"Raft TCP"| KV2
-    KV0 <-->|"Raft TCP"| KV3
-    KV0 <-->|"Raft TCP"| KV4
-    KV1 <-->|"Raft TCP"| KV2
-    KV1 <-->|"Raft TCP"| KV3
-    KV1 <-->|"Raft TCP"| KV4
-    KV2 <-->|"Raft TCP"| KV3
-    KV2 <-->|"Raft TCP"| KV4
-    KV3 <-->|"Raft TCP"| KV4
+    Dash -->|"Health RPC (cluster state)"| G0
+    Dash -->|"Health RPC"| G1
+    Dash -->|"Health RPC"| G2
+    Dash -->|"HTTP :9000 (chaos ops)"| A0
+    Dash -->|"HTTP :9000"| A1
+    Dash -->|"HTTP :9000"| A2
 
-    %% Agent manages its replica (fault injection)
-    AG0 -->|"SIGKILL · SIGSTOP\niptables · netem"| KV0
-    AG1 -->|"SIGKILL · SIGSTOP\niptables · netem"| KV1
-    AG2 -->|"SIGKILL · SIGSTOP\niptables · netem"| KV2
-    AG3 -->|"SIGKILL · SIGSTOP\niptables · netem"| KV3
-    AG4 -->|"SIGKILL · SIGSTOP\niptables · netem"| KV4
-
-    %% Style
-    style KV0 fill:#ffd700,stroke:#b8860b,color:#000
-    style KV1 fill:#d3d3d3,stroke:#808080,color:#000
-    style KV2 fill:#d3d3d3,stroke:#808080,color:#000
-    style KV3 fill:#d3d3d3,stroke:#808080,color:#000
-    style KV4 fill:#d3d3d3,stroke:#808080,color:#000
-    style AG0 fill:#ffa500,stroke:#cc7000,color:#000
-    style AG1 fill:#ffa500,stroke:#cc7000,color:#000
-    style AG2 fill:#ffa500,stroke:#cc7000,color:#000
-    style AG3 fill:#ffa500,stroke:#cc7000,color:#000
-    style AG4 fill:#ffa500,stroke:#cc7000,color:#000
-    style Client fill:#90ee90,stroke:#228b22,color:#000
+    style VM1 fill:#E8F4FD,stroke:#4A90D9,stroke-width:3px
+    style VM0 fill:#F5F5F5,stroke:#AAAAAA,stroke-width:2px
+    style VM2 fill:#F5F5F5,stroke:#AAAAAA,stroke-width:2px
+    style G0 fill:#5B8DB8,color:#fff
+    style G1 fill:#5B8DB8,color:#fff
+    style G2 fill:#5B8DB8,color:#fff
+    style R0 fill:#2E5F8A,color:#fff
+    style R1 fill:#2E5F8A,color:#fff
+    style R2 fill:#2E5F8A,color:#fff
+    style F0 fill:#4CAF50,color:#fff
+    style F1 fill:#4CAF50,color:#fff
+    style F2 fill:#4CAF50,color:#fff
+    style B0 fill:#555555,color:#fff
+    style B1 fill:#555555,color:#fff
+    style B2 fill:#555555,color:#fff
+    style A0 fill:#FF8C00,color:#fff
+    style A1 fill:#FF8C00,color:#fff
+    style A2 fill:#FF8C00,color:#fff
+    style Client fill:#90EE90,stroke:#228B22
+    style Dash fill:#DDA0DD,stroke:#8B008B
 ```
 
-> **Note for slide version:** KV0 (gold) = current leader. KV1–KV4 (grey) = followers. Simplify for slide by removing port numbers from the node labels — put ports in a legend box instead.
+### Color Key
+| Color | Element |
+|-------|---------|
+| Blue border (VM1) | Current Leader |
+| Steel blue `#5B8DB8` | gRPC Server layer |
+| Dark blue `#2E5F8A` | Raft Engine layer |
+| Green `#4CAF50` | FSM (Replicated State Machine) layer |
+| Dark grey `#555555` | BoltDB storage layer |
+| Orange `#FF8C00` | Sidecar Agent |
+| Light green | kv-client |
+| Purple | kv-dashboard |
 
-### Visual Description Prompt (for Excalidraw / Lucidchart / AI image tools)
+### Visual Description Prompt (for Excalidraw / AI image tools)
 
-> Draw a distributed systems architecture diagram with the following elements:
+> Draw a distributed systems architecture diagram in a clean, modern style inspired by the etcd architecture diagrams.
 >
-> **Layout:** Outer boundary box labeled "☁️ GCP Project — us-central1". Inside, two zone boxes side-by-side: "Zone A (us-central1-a)" containing 3 VMs, "Zone C (us-central1-c)" containing 2 VMs.
+> **Outer box:** Large rounded rectangle labeled "☁️ GCP Cluster — us-central1". Light blue background tint.
 >
-> **Each VM box** contains two sub-elements stacked vertically:
-> - Top (gold/yellow for node0, grey for node1–4): rectangle labeled "kv-store Raft Replica" with two port badges: "gRPC :5005X" and "Raft TCP :1200X"
-> - Bottom (orange): smaller rectangle labeled "node-agent Sidecar Agent"
+> **Three VM boxes** arranged side by side (horizontal layout). Each VM is a white rounded rectangle. The **middle VM** (node1 = Leader) has a blue border and blue header label "LEADER 👑". The left (node0) and right (node2) VMs have grey borders and grey label "Follower".
 >
-> **Arrows:**
-> - Red bidirectional arrows connecting all 5 kv-store boxes to each other (full mesh). Label one arrow "Raft: AppendEntries · Heartbeat · Vote"
-> - Green arrow from external "kv-client" box (outside the GCP boundary) pointing to node0's kv-store. Label: "gRPC Get/Set/Delete → auto-redirect to Leader"
-> - Orange arrow from each node-agent down to its kv-store. Label on one: "SIGKILL · SIGSTOP · iptables · netem"
+> **Inside each VM**, two stacked sections:
 >
-> **Color scheme:**
-> - node0 kv-store: gold (#FFD700) = Leader
-> - node1–4 kv-store: light grey = Followers
-> - All node-agents: orange (#FFA500)
-> - kv-client: light green
+> **Section 1 — kv-store (Raft Replica):** A rectangle with 4 horizontal color bands stacked top-to-bottom:
+> - Steel blue band: **gRPC Server** — `:50051+i` — "Get · Set · Delete · Health · Join"
+> - Dark blue band: **Raft Engine** — `:12000+i` — "Leader Election · AppendEntries · Heartbeat"
+> - Green band: **FSM** — "KV Map · Idempotency Table · Peer Registry"
+> - Dark grey band: **BoltDB** — "WAL · Stable Store · Snapshot"
 >
-> **Crown emoji** 👑 on node0 to indicate it is the current leader.
+> **Section 2 — Sidecar Agent:** Below the kv-store rectangle, a separate orange rectangle labeled "🔧 Sidecar Agent :9000" with sub-text "SIGKILL · SIGSTOP · iptables · tc netem". A dotted orange arrow points upward from the Sidecar Agent into the kv-store box, labeled "controls".
 >
-> **Bottom caption:** "Write commits when leader receives ACK from ⌊N/2⌋+1 replicas. Minority partition → writes blocked (CP Safety)."
+> **Raft consensus band:** A horizontal dashed light-blue band connecting all three "Raft Engine" rows across VMs (like the connecting band in the etcd diagram). Label: "Raft Consensus — AppendEntries · Heartbeat · RequestVote".
+>
+> **External — left of GCP box:** Light green rounded rectangle: "🖥️ kv-client — Smart Client". Arrow right into node0 gRPC Server: "gRPC → auto-redirect to Leader". Small badge: "Exactly-once: clientID + seqNum".
+>
+> **External — above GCP box:** Purple rounded rectangle: "📊 kv-dashboard :8080 — Web UI · Chaos Orchestrator". Thin arrows down to each node's gRPC Server ("Health RPC"). Orange arrows down to each Sidecar Agent ("HTTP chaos ops").
+>
+> **Bottom caption callout box:** "Write commits after ACK from ⌊N/2⌋+1 = 2 replicas · Minority partition → writes blocked (CP Safety) · MTTR ~1.25s"
 
 ---
 
@@ -256,7 +295,7 @@ graph LR
 
 | Diagram | Tool | Slide | Report Section |
 |---------|------|-------|---------------|
-| D1 — Architecture | Mermaid → export PNG, or Excalidraw | Slide 2 (full width) | System Design — §1 overview |
+| D1 — Architecture (3-node, layered) | Mermaid → export PNG, or Excalidraw visual description | Slide 2 (full width) | System Design — §1 overview |
 | D2 — Write path sequence | Mermaid → export PNG | — | System Design — §4 write path |
 | D3 — Partition before/after | Mermaid → export PNG, or manual Slides | Slide 4 (callout box, half-width) | Implementation — §6 partition design |
 | latency_quorum_proof.png | Already exists | Slide 4 (embed) | Results |
