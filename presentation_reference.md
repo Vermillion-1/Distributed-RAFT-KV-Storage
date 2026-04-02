@@ -1,92 +1,203 @@
-# Presentation Reference: Fault-Tolerant Distributed Raft KV Store
+# Presentation Reference: Fault-Tolerant Distributed Raft KV Store — v1.2
 **Purpose:** Use this document as the prompt for Gemini/Claude to generate your final Google Slides / PPT.
+**Version:** Updated for v1.2 (5-node GCP, bidirectional iptables, NIC auto-detect, 37/37 test suite)
+**Deadline:** April 2, 2026, 9:00 AM (slides PDF submission)
+**Presentation:** 5 minutes total — 4 slides
 
 ---
 
 ## 📽️ SLIDE 1: Title & Overview
-**Focus:** Introduction & Problem Statement (30 Seconds)
+**Target time:** ~30 seconds
 
-### Content:
-*   **Project Title:** Implementing a Highly-Available, Fault-Tolerant, Distributed Key-Value Store.
-*   **The Team:** [Your Names Here]
-*   **The "Why":** Standard cloud applications face arbitrary network partitions and VM crashes. We built a system that survives these without data corruption or human manual intervention.
-*   **Fault Model:** Asynchronous environment with Crash-Recovery and Network partitions (IP-tables simulation). Non-Byzantine.
+### Content Bullets:
+- **Project Title:** Fault-Tolerant Distributed Key-Value Store using Raft Consensus
+- **The Team:** [Your Names Here]
+- **The "Why":** Cloud VMs crash and networks partition without warning. We built a system that survives both without data loss or human intervention — automatically.
+- **System Class:** CP (CAP theorem) — Consistency + Partition Tolerance. Minority side sacrifices availability to preserve data correctness.
+- **Fault Model:** Asynchronous, Non-Byzantine — crash-recovery, network partition (iptables), process freeze (SIGSTOP), message delay (netem)
 
 ### Visual Cues:
-*   Title in bold, modern font.
-*   Background image: A distributed network mesh or a stylized server cluster on GCP.
+- Title bold, modern sans-serif
+- Subtitle: "Raft Consensus · GCP · Go · 37/37 Tests Passing"
+- Background: abstract network mesh or GCP datacenter visual
+- Small CAP theorem triangle with "CP" highlighted
 
-### 🎙️ Speaker Script (0:00 - 0:30):
-"Hello everyone. Our project tackles one of the hardest problems in cloud computing: maintaining a consistent state across physically isolated machines. We built a distributed Key-Value store based on the Raft consensus protocol. Our goal wasn't just to store keys, but to build a 'CP' system—one that prioritizes Consistency and Partition Tolerance—ensuring that even if a data center's network is literally cut in half, your data remains safe and accurate."
+### 🎙️ Speaker Script (0:00 – 0:30):
+"Hi everyone. Our project tackles a fundamental problem in cloud computing: what happens when your distributed system's network gets cut in half, or a VM crashes mid-write? We built a key-value store based on the Raft consensus protocol that survives these exact failures — automatically, without data loss, and without a human touching a config file. We classify it as a CP system: we chose consistency over availability, meaning the minority side of a partition correctly goes offline rather than serving stale data."
 
 ---
 
 ## 📽️ SLIDE 2: System Functionality & Design
-**Focus:** Architectural Depth (90 Seconds)
+**Target time:** ~90–120 seconds
 
-### Content:
-*   **Consensus Algorithm:** Raft (Strongly Consistent - CP).
-*   **Symmetrical Architecture:** Every VM runs the same binary; No "Master" node bottleneck.
-*   **Dual-Port Design (Crucial Innovation):** 
-    *   **Port 12000:** Internal Raft traffic (Leader Election, Log Heartbeats).
-    *   **Port 50051:** User gRPC API (Get, Set, Delete).
-*   **Service Discovery:** Distributed state machine records dynamic GCP Internal IPs for seamless cross-VM client redirects.
-*   **Exactly-Once Semantics:** Client-ID and Sequence-Num tracking in the FSM prevents duplicate writes during retries.
+### Content Bullets:
+- **Consensus Algorithm:** Raft — Strong Leader model, CP semantics
+- **Replicated State Machine:** Every VM runs an identical `kv-store` replica; no single permanent master
+- **Dual-Port Node Design (key innovation):**
+  - Port `12000+i` — Raft TCP: leader election, log replication, heartbeats (internal only)
+  - Port `50051+i` — gRPC API: Get/Set/Delete for clients (external)
+  - Separation allows fault injection on client path without disrupting consensus
+- **Sidecar Agent (per VM):** Independent control plane process — injects SIGKILL, SIGSTOP, bidirectional iptables partition, tc netem — without the replica's cooperation
+- **Smart Client:** Connects to any replica; auto-redirects to leader on follower response. Multi-address failover after leader death.
+- **Exactly-Once Semantics:** `(client_id, seq_num)` dedup in FSM — retried writes never apply twice
+- **Linearizable Reads:** `VerifyLeader()` heartbeat before every read — no stale data from deposed leaders
 
-### Visual Cues:
-*   **Diagram:** A simplified 3-node triangle.
-*   Show nodes labeled "GCP VM" with two arrows: a red one between nodes (Raft) and a green one from the outside (Client gRPC).
+### Architecture Diagram Description (for slide designer):
+Draw a **5-node diagram** (pentagon or 2-row arrangement: 3 top, 2 bottom):
+- **5 VM boxes**, each labeled "GCP e2-micro · Replica + Sidecar Agent"
+- **Red arrows** between all replicas (bidirectional): labeled "Raft TCP :12000–12004 (heartbeat · AppendEntries · vote)"
+- **Green arrow** from "Client (kv-client)" entering from outside to one replica: labeled "gRPC :50051–50055 → auto-redirect to Leader"
+- **Orange badge** on each VM box: "Sidecar Agent" — small sub-box, connected to "iptables · netem · SIGKILL" icons below
+- **Crown icon** on the current leader replica
+- **Key callout box at bottom:** "Write commits on ⌊N/2⌋+1 ACKs · Minority partition → writes blocked (CP Safety)"
 
-### 🎙️ Speaker Script (0:30 - 2:00):
-"Our design follows a strictly symmetrical architecture across three GCP virtual machines. To handle faults precisely, we designed a dual-port node. One port is dedicated to the 'Raft heartbeat'—the mathematical core where nodes vote and replicate logs. The second port is the gRPC API for the user. We did this so we can inject massive network delays on the user's data port without accidentally killing the underlying cluster consensus. We also solved the 'Service Discovery' problem: if a client hits a follower, the follower knows the exact GCP internal IP of the leader and issues an automatic redirect. Finally, we implemented 'Exactly-Once Semantics'—this means even if a network drop causes a client to send the same write twice, our state machine recognizes the sequence number and ensures only one update is ever applied."
+### 🎙️ Speaker Script (0:30 – 2:00):
+"Our design uses a strictly symmetrical architecture — every VM runs the exact same binary. There is no special master node. The 'leader' role is determined by Raft election and can move to any replica at any time.
+
+The most important design decision was the dual-port layout. Each replica has a dedicated Raft TCP port for consensus traffic — heartbeats, log replication, leader votes — and a separate gRPC port for client requests. This separation lets us inject massive network delays on the client path during testing without accidentally killing the underlying consensus protocol.
+
+On each VM, we run a Sidecar Agent — a completely independent process that gives us remote control over the replica via HTTP API. We can SIGKILL it to simulate power loss, SIGSTOP it to freeze it, or apply kernel-level iptables rules to cut it off from the network entirely — at the TCP level, not by killing the process.
+
+For clients, we built a smart client that connects to any replica and automatically redirects to the leader. We also implemented exactly-once semantics: every write carries a client ID and sequence number, and the FSM's dedup table ensures a retried write is never applied twice, even after a leader change."
 
 ---
 
 ## 📽️ SLIDE 3: Implementation Details
-**Focus:** The "Hard" Engineering (60 Seconds)
+**Target time:** ~60–90 seconds
 
-### Content:
-*   **The Stack:** Go (Golang), gRPC, Protobuf, BoltDB (Persistent Log store).
-*   **GCP Orchestration:** Custom `dynamic_deploy.sh` script—provisions N VMs, cross-compiles for Linux/AMD64, and bootstraps a global quorum across availability zones.
-*   **Chaos Engineering Suite:**
-    *   **Sidecar Agent:** A monitoring process that manages the KV-Store.
-    *   **Fault Injection:** Remotely triggering `SIGKILL` (power loss), `SIGSTOP` (freeze), and `IP-Tables` (partition) via our dashboard API.
-*   **State Compaction:** Tuning `SnapshotThreshold` aggressively (10 entries) to force binary snapshots over the wire.
+### Content Bullets:
+- **Stack:** Go 1.21 · gRPC / Protobuf · HashiCorp Raft v1.7.3 · BoltDB (`go.etcd.io/bbolt`)
+- **Deployment Engine (`dynamic_deploy.sh`):**
+  - Provisions N GCP VMs, configures firewall rules, cross-compiles `linux/amd64` binaries on macOS
+  - SSH readiness retry loop — polls until `sshd` reachable, not a blind sleep (BUG-1 fix)
+  - Bootstraps full N-node quorum in < 2 minutes
+- **Sidecar Agent — v1.2 hardening:**
+  - Bidirectional iptables partition: `INPUT DROP` on own Raft port + `OUTPUT DROP` per peer Raft port (BUG-4)
+  - NIC auto-detection: `ip route get 8.8.8.8` → works on `eth0`, `ens4`, any Linux NIC (BUG-5)
+- **Aggressive Snapshotting:** `SnapshotThreshold=10` entries → `InstallSnapshot` RPC teleports full FSM state to lagging replicas
+- **Binary portability:** `go:embed` bundles dashboard HTML into binary — no filesystem path dependency
+- **Test Suite:** 6 phases · 37 tests · liveness · partition · latency · durability · idempotency · kernel chaos
 
 ### Visual Cues:
-*   Logos: GCP, Go, gRPC.
-*   Small screenshot snippet of the `dynamic_deploy` terminal output showing cross-compilation and IP mapping.
+- Tech stack logos row: Go gopher, GCP cloud icon, gRPC logo, BoltDB
+- Code snippet (small, left column): the `wait_ssh()` retry loop
+- Code snippet (small, right column): the bidirectional iptables block
+- Test suite coverage pills at bottom: "P1 6/6 ✅ · P2 9/9 ✅ · P3 3/3 ✅ · P4 4/4 ✅ · P5 8/8 ✅ · P6 13/13 ✅ = 37/37"
 
-### 🎙️ Speaker Script (2:00 - 3:00):
-"For implementation, we used Go for its high-performance concurrency. We didn't just run this locally; we built a dynamic deployment engine that spins up a cluster on GCP in under two minutes. To prove our fault tolerance, we built a 'Chaos Sidecar Agent.' This allows us to remotely send POSIX signals like SIGSTOP to a specific VM to freeze it, or SIGKILL to simulate a total power loss. A technical highlight of our implementation is 'Aggressive Compaction.' Instead of letting logs grow forever, we tuned our Raft thresholds to force binary snapshots after every 10 writes. When a node that was 'dead' for a month wakes up, the leader doesn't replay tiny logs; it 'teleports' the entire state via an InstallSnapshot RPC."
+### 🎙️ Speaker Script (2:00 – 3:00):
+"For implementation, we used Go for high-performance concurrency, with gRPC for the client API, HashiCorp Raft for consensus, and BoltDB for durable log storage on disk.
+
+One of our hardest engineering challenges was the deployment engine. Our script spins up N virtual machines on GCP, cross-compiles the binaries for Linux from macOS, uploads them over SSH, and bootstraps a live quorum — all in under two minutes. We had to build a proper SSH readiness retry loop because GCP e2-micro VMs sometimes take 30-50 seconds for their SSH daemon to start, and a blind sleep was crashing the deploy.
+
+The second major challenge was getting fault injection right. Our initial partition implementation only blocked incoming Raft traffic — which meant an isolated leader could still send outbound heartbeats to followers, stay leader, and accept writes. This violated CP safety. We fixed this with bidirectional iptables. We also discovered GCP Debian uses `ens4` as the network interface name, not `eth0` — so our netem delay wasn't actually applying. Auto-detection fixed this. These two fixes pushed our test score from 33/36 to 37/37."
 
 ---
 
 ## 📽️ SLIDE 4: Results & Analysis
-**Focus:** Quantitative Proof (90 Seconds)
+**Target time:** ~60–90 seconds
 
-### Content:
-*   **Result 1: MTTR (Mean Time to Recovery):** 
-    *   Leader failure detected in 500ms; Election resolved in 750ms.
-    *   **Total Outage:** ~1.25s (Predictable & Bounded).
-*   **Result 2: Quorum Bypass:** 
-    *   A 2000ms delay on a follower only increased baseline write latency by 4.2ms.
-    *   **Proves:** N/2 + 1 consensus works perfectly by ignoring lagging minority nodes.
-*   **Result 3: Durability:** 100% Key-Recovery ratio across all 4 phases (No data loss).
+### Content — Four Result Tables:
+
+**Table 1: Write Latency & Throughput Under Fault Injection (Phase 3)**
+
+| Condition | Fault | Latency (ms/op) | Throughput (ops/sec) | Change |
+|-----------|-------|-----------------|----------------------|--------|
+| Baseline | — | 19.6 | 51 | — |
+| Slow follower | 2000ms netem on 1 replica | 23.8 | 42 | −18% |
+| Slow leader | 500ms netem on leader | 502 | 2 | −96% |
+
+**Table 2: MTTR Breakdown — Leader Failure (Phase 1 L1 + Phase 6 N6a)**
+
+| Window | Duration | Event |
+|--------|----------|-------|
+| Detection | 0 – 500ms | Followers miss heartbeats |
+| Election | 500 – 1250ms | Candidate collects majority votes |
+| **Total MTTR** | **~1.25s** | Same result via SIGKILL and iptables |
+
+**Table 3: Durability — Key Recovery Ratio (Phase 4)**
+
+| Scenario | Acknowledged | Recovered | Ratio |
+|----------|-------------|-----------|-------|
+| D1: Total cluster wipe + restart | 10 | 10 | **100%** |
+| D2: Dirty leader crash mid-write | 7 | 7 | **100%** |
+| D3: Snapshot catch-up (30 missed entries) | 30 | 30 | **100%** |
+
+**Table 4: Quorum Generalization**
+
+| N | Quorum | Tolerates | L2 | L3 trigger |
+|---|--------|-----------|-----|-----------|
+| 3 | 2 | 1 failure | ✅ | 2 kills |
+| 5 | 3 | 2 failures | ✅ | 3 kills |
+
+### Technical Challenge (required by rubric):
+**Challenge encountered:** Our partition implementation initially only blocked *incoming* Raft traffic (`INPUT DROP`). An isolated leader could still send outbound heartbeats to followers → followers never timed out → no election fired → isolated leader stayed leader and accepted writes (CP safety violation — N6c test: write to isolated leader should fail).
+
+**Root cause:** A symmetric network partition requires blocking *both* directions: incoming ACKs *and* outgoing heartbeats. Only blocking one direction creates a "receive omission" fault, not a full partition.
+
+**Fix:** Added `OUTPUT DROP` per peer Raft port. Both directions cut → followers stop receiving heartbeats → election timeout fires in ~1.25s → new leader elected. N6 suite now passes all 6 assertions including N6c (isolated leader rejects writes) and N6e (former leader rejoins as Follower).
 
 ### Visual Cues:
-*   **Embed Graph 1:** `availability_mttr.png` (The timeline).
-*   **Embed Graph 2:** `latency_quorum_proof.png` (The log-scale bars).
+- Embed: `analysis/graphs/latency_quorum_proof.png` (bar chart: baseline vs slow-follower vs slow-leader)
+- Embed: `analysis/graphs/availability_mttr.png` (timeline chart)
+- Bold/highlight: "100%" in Table 3, "~1.25s" in Table 2, "−96%" in Table 1
+- Technical challenge as a callout box with before/after iptables rule snippet
 
-### 🎙️ Speaker Script (3:00 - 4:30):
-"Finally, the results. Our evaluation phase proved three key things. First, our MTTR—or Mean Time To Recovery. When we killed the leader, the cluster detected the failure in 500ms and seated a new leader in 750ms. That entire 1.25-second window is perfectly reflected in this chart. Second, we proved the 'Quorum Bypass' property. When we artificially slowed down one follower by 2 seconds, our client write latency barely budged. This is the mathematical beauty of Raft: the system effectively 'cuts out the slow part' to maintain high throughput. Lastly, our durability experiments resulted in zero data loss. Every write acknowledged to a client was recovered from the physical disk across every failure mode we tested."
+### 🎙️ Speaker Script (3:00 – 4:30):
+"Our results prove three key properties.
+
+First, latency. The slow-follower result shows the quorum bypass working: a 2000ms delay on one of five replicas only added 4.2ms to write latency. The leader only needs acknowledgment from a majority — 3 of 5 — so the slow replica is simply ignored for the commit. The slow-leader result shows the expected bottleneck: every write must go through the leader, so a 500ms leader delay added 482ms of latency per write.
+
+Second, MTTR. When we killed the leader — with SIGKILL and separately with iptables — the cluster detected the failure in 500ms and elected a new leader within 750ms. Total downtime: ~1.25 seconds. The fact that both fault methods produce identical MTTR confirms the mechanism is working correctly: Raft's timeout-based detection is truly independent of how the failure happened.
+
+Third, durability. Across every failure scenario — total wipe, dirty crash mid-write, and snapshot catch-up — we recovered 100% of acknowledged writes. Nothing that got a 'success' response to the client was ever lost.
+
+Our biggest technical challenge was the partition fix. We initially only blocked incoming traffic, which meant an isolated leader could still heartbeat its followers and stay leader — a CP safety violation. The fix required bidirectional iptables rules, and this is what closed the gap from 33/36 to 37/37 in our test suite."
 
 ---
 
-## 📽️ [EXTRA] Q&A PREP (The 2-3 Peer Questions)
-*   **Q: Why choose Raft over Paxos?** 
-    *   *Ans:* Raft is designed for understandability and has a clear 'Strong Leader' model, which makes implementing our Client Redirection mechanism much more straightforward in Go.
-*   **Q: How do you handle a total network partition (split split brain)?** 
-    *   *Ans:* Since we use a Quorum (N/2 + 1), the minority side of the partition will realize it can't get enough votes and will block all writes. This ensures we never branch the data into two conflicting states.
-*   **Q: What happens if the persistence disk (BoltDB) is full?** 
-    *   *Ans:* This is where our 'Snapshotting' comes in. It flattens the infinite log into a single binary file to keep storage usage constant regardless of uptime.
+## 📽️ Q&A Preparation (2–3 minutes, 2–3 questions)
+
+### Q1: Why Raft over Paxos?
+**Answer:** Raft was specifically designed for understandability with a clear strong-leader model. This made our client redirect implementation straightforward — clients always need to find exactly one leader. Paxos is more general but significantly harder to implement correctly in Go, and the HashiCorp Raft library gives us a battle-tested foundation. The correctness guarantees are equivalent.
+
+### Q2: How does your partition actually work — isn't it just killing the process?
+**Answer:** No, and this distinction matters. We use kernel-level `iptables DROP` rules that block TCP packets at the OS level while the process keeps running. The replica is alive and willing to respond, but its packets are silently dropped. This tests whether Raft's timeout-based failure detection works correctly — which is the real mechanism used in production networks. In v1.2, we made the partition bidirectional: both incoming ACKs and outgoing heartbeats are blocked. One direction alone creates a "receive omission" fault, not a true partition.
+
+### Q3: What determines the MTTR and can you make it faster?
+**Answer:** MTTR = heartbeat timeout (500ms) + election timeout (750ms) = 1.25s. These are pure configuration choices. You could set the heartbeat to 50ms and the election timeout to 500ms for sub-second MTTR. The trade-off is spurious elections: a single delayed heartbeat on a congested network would trigger an election unnecessarily. We tuned for GCP cross-zone RTT of ~15ms with a conservative buffer for e2-micro scheduling jitter.
+
+### Q4: Why did you expand from 3 to 5 nodes?
+**Answer:** 3 nodes is the minimum to prove Raft's correctness — you need at least one follower beyond the leader to form a majority. But 5 nodes proves the algorithm generalizes: it tolerates 2 simultaneous failures, and the quorum threshold `⌊N/2⌋+1` is enforced exactly — the cluster goes unavailable at the right moment, not earlier or later. It turns the proof from "minimum viable example" into "demonstrates scaling."
+
+### Q5: What are the known limitations?
+**Answer:** Three main ones we're transparent about. First, static cluster membership — the cluster size is fixed at deploy time. A permanently failed node cannot be replaced without tearing the whole cluster down. Production systems use joint consensus for this. Second, single-leader write ceiling — all writes go through one replica, so write throughput doesn't scale horizontally. Sharding would be required. Third, single-region — all VMs are in `us-central1`. A geo-distributed cluster would require much higher election timeouts to account for cross-continent RTTs.
+
+---
+
+## Timing Guide
+
+| Section | Content | Target |
+|---------|---------|--------|
+| Slide 1 | Title + Fault Model | 0:00 – 0:30 |
+| Slide 2 | Architecture + Design | 0:30 – 2:00 |
+| Slide 3 | Implementation | 2:00 – 3:00 |
+| Slide 4 | Results + Challenge | 3:00 – 4:30 |
+| Buffer | Transitions | 4:30 – 5:00 |
+| Q&A | 2–3 peer questions | 5:00 – 7:30 |
+
+**Hard constraint:** PDF submitted by April 2, 2026 at 9:00 AM. Exactly 4 slides — no more, no fewer.
+
+---
+
+## Terminology Cheat Sheet
+
+| ❌ Avoid | ✅ Use instead |
+|---------|--------------|
+| Core Server | Raft Replica / RSM Node |
+| Server | Replica |
+| Master node | Leader (elected, not permanent) |
+| The cluster | Consensus group |
+| State machine | Replicated State Machine (RSM) |
+| Chaos Proxy | Sidecar Agent (kv-chaos is deprecated in v1.2) |
+| 3-node cluster | N-node cluster (tested at N=3 and N=5) |
+| "nodes fail" | "replicas crash" / "network partition" |
