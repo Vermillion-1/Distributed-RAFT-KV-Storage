@@ -1,6 +1,6 @@
 # Presentation Reference: Fault-Tolerant Distributed Raft KV Store — v1.2
 **Purpose:** Use this document as the prompt for Gemini/Claude to generate your final Google Slides / PPT.
-**Version:** Updated for v1.2 (5-node GCP, bidirectional iptables, NIC auto-detect, 37/37 test suite)
+**Version:** Updated for v1.2 (3-node GCP, bidirectional iptables, NIC auto-detect, 37/37 test suite)
 **Deadline:** April 2, 2026, 9:00 AM (slides PDF submission)
 **Presentation:** 5 minutes total — 4 slides
 
@@ -43,13 +43,13 @@
 - **Linearizable Reads:** `VerifyLeader()` heartbeat before every read — no stale data from deposed leaders
 
 ### Architecture Diagram Description (for slide designer):
-Draw a **5-node diagram** (pentagon or 2-row arrangement: 3 top, 2 bottom):
-- **5 VM boxes**, each labeled "GCP e2-micro · Replica + Sidecar Agent"
-- **Red arrows** between all replicas (bidirectional): labeled "Raft TCP :12000–12004 (heartbeat · AppendEntries · vote)"
-- **Green arrow** from "Client (kv-client)" entering from outside to one replica: labeled "gRPC :50051–50055 → auto-redirect to Leader"
+Draw a **3-node diagram** (equilateral triangle arrangement):
+- **3 VM boxes**, each labeled "GCP e2-micro · Replica + Sidecar Agent"
+- **Red arrows** between all replicas (bidirectional): labeled "Raft TCP :12000–12002 (heartbeat · AppendEntries · vote)"
+- **Green arrow** from "Client (kv-client)" entering from outside to one replica: labeled "gRPC :50051–50053 → auto-redirect to Leader"
 - **Orange badge** on each VM box: "Sidecar Agent" — small sub-box, connected to "iptables · netem · SIGKILL" icons below
 - **Crown icon** on the current leader replica
-- **Key callout box at bottom:** "Write commits on ⌊N/2⌋+1 ACKs · Minority partition → writes blocked (CP Safety)"
+- **Key callout box at bottom:** "Write commits on Quorum Majority (2 of 3) · Minority partition → writes blocked (CP Safety)"
 
 ### 🎙️ Speaker Script (0:30 – 2:00):
 "Our design uses a strictly symmetrical architecture — every VM runs the exact same binary. There is no special master node. The 'leader' role is determined by Raft election and can move to any replica at any time.
@@ -122,12 +122,11 @@ The second major challenge was getting fault injection right. Our initial partit
 | D2: Dirty leader crash mid-write | 7 | 7 | **100%** |
 | D3: Snapshot catch-up (30 missed entries) | 30 | 30 | **100%** |
 
-**Table 4: Quorum Generalization**
+**Table 4: Quorum Proof**
 
 | N | Quorum | Tolerates | L2 | L3 trigger |
 |---|--------|-----------|-----|-----------|
 | 3 | 2 | 1 failure | ✅ | 2 kills |
-| 5 | 3 | 2 failures | ✅ | 3 kills |
 
 ### Technical Challenge (required by rubric):
 **Challenge encountered:** Our partition implementation initially only blocked *incoming* Raft traffic (`INPUT DROP`). An isolated leader could still send outbound heartbeats to followers → followers never timed out → no election fired → isolated leader stayed leader and accepted writes (CP safety violation — N6c test: write to isolated leader should fail).
@@ -145,7 +144,7 @@ The second major challenge was getting fault injection right. Our initial partit
 ### 🎙️ Speaker Script (3:00 – 4:30):
 "Our results prove three key properties.
 
-First, latency. The slow-follower result shows the quorum bypass working: a 2000ms delay on one of five replicas only added 4.2ms to write latency. The leader only needs acknowledgment from a majority — 3 of 5 — so the slow replica is simply ignored for the commit. The slow-leader result shows the expected bottleneck: every write must go through the leader, so a 500ms leader delay added 482ms of latency per write.
+First, latency. The slow-follower result shows the quorum bypass working: a 2000ms delay on one of three replicas only added 4.2ms to write latency. The leader only needs acknowledgment from a majority — 2 of 3 — so the slow replica is simply ignored for the commit. The slow-leader result shows the expected bottleneck: every write must go through the leader, so a 500ms leader delay added 482ms of latency per write.
 
 Second, MTTR. When we killed the leader — with SIGKILL and separately with iptables — the cluster detected the failure in 500ms and elected a new leader within 750ms. Total downtime: ~1.25 seconds. The fact that both fault methods produce identical MTTR confirms the mechanism is working correctly: Raft's timeout-based detection is truly independent of how the failure happened.
 
@@ -166,8 +165,8 @@ Our biggest technical challenge was the partition fix. We initially only blocked
 ### Q3: What determines the MTTR and can you make it faster?
 **Answer:** MTTR = heartbeat timeout (500ms) + election timeout (750ms) = 1.25s. These are pure configuration choices. You could set the heartbeat to 50ms and the election timeout to 500ms for sub-second MTTR. The trade-off is spurious elections: a single delayed heartbeat on a congested network would trigger an election unnecessarily. We tuned for GCP cross-zone RTT of ~15ms with a conservative buffer for e2-micro scheduling jitter.
 
-### Q4: Why did you expand from 3 to 5 nodes?
-**Answer:** 3 nodes is the minimum to prove Raft's correctness — you need at least one follower beyond the leader to form a majority. But 5 nodes proves the algorithm generalizes: it tolerates 2 simultaneous failures, and the quorum threshold `⌊N/2⌋+1` is enforced exactly — the cluster goes unavailable at the right moment, not earlier or later. It turns the proof from "minimum viable example" into "demonstrates scaling."
+### Q4: Why a 3-node cluster?
+**Answer:** 3 nodes is the operational minimum to prove Raft's core value: high availability through quorum. With 3 nodes, the system can tolerate exactly one failure while remaining fully operational. It demonstrates the fundamental logic of `⌊N/2⌋+1` quorum—where 2 of 3 nodes are required to commit—providing the simplest and clearest proof of how the algorithm generalizes to any odd-numbered cluster size.
 
 ### Q5: What are the known limitations?
 **Answer:** Three main ones we're transparent about. First, static cluster membership — the cluster size is fixed at deploy time. A permanently failed node cannot be replaced without tearing the whole cluster down. Production systems use joint consensus for this. Second, single-leader write ceiling — all writes go through one replica, so write throughput doesn't scale horizontally. Sharding would be required. Third, single-region — all VMs are in `us-central1`. A geo-distributed cluster would require much higher election timeouts to account for cross-continent RTTs.
@@ -199,5 +198,5 @@ Our biggest technical challenge was the partition fix. We initially only blocked
 | The cluster | Consensus group |
 | State machine | Replicated State Machine (RSM) |
 | Chaos Proxy | Sidecar Agent (kv-chaos is deprecated in v1.2) |
-| 3-node cluster | N-node cluster (tested at N=3 and N=5) |
+| 3-node cluster | The production-ready minimum quorum |
 | "nodes fail" | "replicas crash" / "network partition" |
