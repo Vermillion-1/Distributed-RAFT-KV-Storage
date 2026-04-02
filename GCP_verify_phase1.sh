@@ -63,7 +63,7 @@ wait_leader() {
 header "PRE-FLIGHT"
 if ! curl -sf "${API}/cluster" > /dev/null 2>&1; then
   echo -e "${RED}Dashboard not reachable at ${API}. Start it first:${RESET}"
-  echo "  ./kv-dashboard -nodes=3 -port=${PORT}"
+  echo "  ./kv-dashboard -nodes=<N> -port=${PORT}"
   exit 1
 fi
 TOTAL_NODES=$(cluster | python3 -c "import sys,json; print(len(json.load(sys.stdin)['nodes']))")
@@ -151,7 +151,7 @@ if [ -n "$NEW_L" ]; then
   pass "Cluster recovered from split election — new leader: $NEW_L"
 else
   # A4 (GCP_TODO.md): quorum loss on a 3-node cluster with 2 dead is CORRECT CP behavior, not a failure
-  skip "L2: Quorum lost with 2/3 dead — no leader is correct CP behavior (expected)"
+  skip "L2: Quorum lost ($((TOTAL_NODES - 1))/${TOTAL_NODES} killed) — no leader is correct CP behavior (expected)"
 fi
 info "Restoring killed nodes..."
 restart_node "$L" 2>/dev/null || true

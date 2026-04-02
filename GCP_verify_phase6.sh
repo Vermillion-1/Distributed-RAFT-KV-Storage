@@ -326,7 +326,7 @@ if [ -n "$OTHER_NODES" ]; then
   info "Nodes alive during leader netem: ${ALIVE_CHECK}"
   
   if [ "$ALIVE_CHECK" -ge 2 ]; then
-    pass "N5: Cluster accessible during netem (${ALIVE_CHECK}/3 nodes alive)"
+    pass "N5: Cluster accessible during netem (${ALIVE_CHECK}/${TOTAL} nodes alive)"
   else
     info "N5: Cluster degraded but tested"
   fi
@@ -371,9 +371,19 @@ print(ns[0].get('term',0) if ns else 0)
 
   # Followers must detect missing heartbeats and hold an election.
   # ElectionTimeout=750ms → expect new leader within ~3-4 seconds.
-  info "Waiting up to 15s for followers to elect a new leader..."
+  # We must wait for a DIFFERENT leader — the old one may still self-report as Leader
+  # until it receives a higher-term message from the new leader.
+  info "Waiting up to 15s for a NEW leader (different from ${OLD_L}) to emerge..."
   T_PARTITION=$SECONDS
-  NEW_L=$(wait_leader 15)
+  NEW_L=""
+  for _t in $(seq 1 15); do
+    _cand=$(leader)
+    if [ -n "$_cand" ] && [ "$_cand" != "$OLD_L" ]; then
+      NEW_L="$_cand"
+      break
+    fi
+    sleep 1
+  done
   T_ELECTED=$SECONDS
   ELECTION_MTTR=$((T_ELECTED - T_PARTITION))
   info "New leader: '${NEW_L}' (elected in ~${ELECTION_MTTR}s)"

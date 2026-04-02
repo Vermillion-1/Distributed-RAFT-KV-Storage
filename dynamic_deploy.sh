@@ -11,12 +11,12 @@ REGION="us-central1"
 echo "Scaling cluster to ${NODE_COUNT} nodes..."
 
 # Dynamically generate nodes and wrap-around zones to distribute compute load
-AVAILABLE_ZONES=("us-central1-a" "us-central1-b" "us-central1-c")
+AVAILABLE_ZONES=("us-central1-a" "us-central1-c")
 NODES=()
 ZONES=()
 for i in $(seq 0 $((NODE_COUNT - 1))); do
   NODES+=("node${i}")
-  ZONES+=("${AVAILABLE_ZONES[$((i % 3))]}")
+  ZONES+=("${AVAILABLE_ZONES[$((i % ${#AVAILABLE_ZONES[@]}))]}")
 done
 
 MACHINE="e2-micro"
@@ -84,8 +84,21 @@ echo "✅ Binaries built and bundled: binaries.tar.gz"
 
 # ── Step 4: Get internal IPs ──────────────────────────────────────────────────
 echo ""
-echo "📡 Fetching VM internal IPs (waiting for VMs to be ready)..."
-sleep 15  # give VMs time to initialise networking
+echo "📡 Fetching VM internal IPs (waiting for VMs to be SSH-ready)..."
+# Poll each VM until SSH is accepting connections (up to 90s).
+# The previous flat sleep 15 was a race: on a loaded GCP zone sshd can take longer.
+for i in $(seq 0 $((NODE_COUNT - 1))); do
+  NODE="${NODES[$i]}"; ZONE="${ZONES[$i]}"
+  echo "  Waiting for ${NODE} SSH..."
+  for attempt in $(seq 1 18); do
+    if gcloud compute ssh "$NODE" --zone="$ZONE" --ssh-flag="-T" --quiet -- "true" 2>/dev/null; then
+      echo "    ${NODE} ready (attempt ${attempt})"
+      break
+    fi
+    [ "$attempt" -eq 18 ] && { echo "❌ ${NODE} not SSH-ready after 90s"; exit 1; }
+    sleep 5
+  done
+done
 INT_IPS=()
 for i in $(seq 0 $((NODE_COUNT - 1))); do
   IP=$(gcloud compute instances describe "${NODES[$i]}" \
@@ -142,7 +155,7 @@ echo ""
 echo "🔑 Setting execute permissions on each VM..."
 for i in $(seq 0 $((NODE_COUNT - 1))); do
   gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
-    "chmod +x ~/node-agent ~/kv-store ~/kv-dashboard ~/kv-chaos ~/kv-client; shopt -s nullglob; chmod +x ~/*.sh; true"
+    "chmod +x ~/node-agent ~/kv-store ~/kv-dashboard ~/kv-chaos ~/kv-client; find ~/ -maxdepth 1 -name '*.sh' -exec chmod +x {} +"
 done
 echo "✅ Permissions set."
 
@@ -160,8 +173,14 @@ echo "✅ Data directories ready."
 echo ""
 echo "🚀 Starting node-agent on node0 (bootstrap node)..."
 KV_ARGS0="-id=${NODES[0]} -raft=${INT_IPS[0]}:12000 -grpc=${INT_IPS[0]}:50051 -data=/data/raft-kv"
+# Build peer addresses: all nodes EXCEPT node0
+PEER_ADDRS0=""
+for j in $(seq 1 $((NODE_COUNT - 1))); do
+  PEER_ADDRS0+="${INT_IPS[$j]}:$((12000 + j)),"
+done
+PEER_ADDRS0="${PEER_ADDRS0%,}"
 gcloud compute ssh "${NODES[0]}" --zone="${ZONES[0]}" --quiet -- \
-  "nohup ./node-agent -kv-bin=./kv-store -kv-args='${KV_ARGS0}' > agent.log 2>&1 </dev/null & sleep 1"
+  "nohup ./node-agent -kv-bin=./kv-store -kv-args='${KV_ARGS0}' -peer-raft-addrs='${PEER_ADDRS0}' > agent.log 2>&1 </dev/null & sleep 1"
 
 # Poll node0 /health until alive (up to 60s)
 echo "  Waiting for node0 agent to report alive..."
@@ -185,9 +204,17 @@ if [ "$NODE_COUNT" -gt 1 ]; then
     RAFT_PORT=$((12000 + i))
     GRPC_PORT=$((50051 + i))
     KV_ARGS="-id=${NODES[$i]} -raft=${INT_IPS[$i]}:${RAFT_PORT} -grpc=${INT_IPS[$i]}:${GRPC_PORT} -data=/data/raft-kv -join=${INT_IPS[0]}:50051"
+    # Build peer addresses: all nodes except node i
+    PEER_ADDRS=""
+    for j in $(seq 0 $((NODE_COUNT - 1))); do
+      if [ "$j" -ne "$i" ]; then
+        PEER_ADDRS+="${INT_IPS[$j]}:$((12000 + j)),"
+      fi
+    done
+    PEER_ADDRS="${PEER_ADDRS%,}"
     echo "  Starting ${NODES[$i]}..."
     gcloud compute ssh "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet -- \
-      "nohup ./node-agent -kv-bin=./kv-store -kv-args='${KV_ARGS}' > agent.log 2>&1 </dev/null & sleep 1"
+      "nohup ./node-agent -kv-bin=./kv-store -kv-args='${KV_ARGS}' -peer-raft-addrs='${PEER_ADDRS}' > agent.log 2>&1 </dev/null & sleep 1"
   done
 
   # Poll remaining nodes

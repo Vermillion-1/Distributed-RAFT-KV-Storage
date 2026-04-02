@@ -27,12 +27,13 @@ import (
 )
 
 var (
-	mu        sync.Mutex
-	childProc *os.Process // owned by the agent; signalled for kill/pause/resume
-	kvBin     string
-	kvArgs    []string
-	raftPort  string // parsed from -kv-args for B3 iptables rules
-	netIface  string // network interface for tc netem (e.g., "eth0")
+	mu            sync.Mutex
+	childProc     *os.Process // owned by the agent; signalled for kill/pause/resume
+	kvBin         string
+	kvArgs        []string
+	raftPort      string   // parsed from -kv-args for B3 iptables rules
+	peerRaftPorts []string // from -peer-raft-addrs flag; used for bidirectional partition
+	netIface      string   // network interface for tc netem (auto-detected or from -iface)
 )
 
 // spawnKV starts kv-store as a child process.
@@ -66,21 +67,49 @@ func alive(p *os.Process) bool {
 }
 
 func main() {
-	kvBinFlag := flag.String("kv-bin", "./kv-store", "Path to the kv-store binary")
-	kvArgsFlag := flag.String("kv-args", "", "Space-separated args to pass to kv-store")
-	port := flag.Int("port", 9000, "Agent HTTP port")
-	netIfaceFlag := flag.String("iface", "eth0", "Network interface for tc netem (e.g., eth0)")
+	kvBinFlag         := flag.String("kv-bin", "./kv-store", "Path to the kv-store binary")
+	kvArgsFlag        := flag.String("kv-args", "", "Space-separated args to pass to kv-store")
+	port              := flag.Int("port", 9000, "Agent HTTP port")
+	netIfaceFlag      := flag.String("iface", "", "Network interface for tc netem (auto-detected if empty)")
+	peerRaftAddrsFlag := flag.String("peer-raft-addrs", "", "Comma-separated peer Raft addresses (ip:port,...) for bidirectional partition")
 	flag.Parse()
 
-	kvBin = *kvBinFlag
+	kvBin  = *kvBinFlag
 	kvArgs = strings.Fields(*kvArgsFlag)
-	netIface = *netIfaceFlag
 
-	// B3: auto-parse raft port from "-raft=<ip>:<port>" in kv-args
-	// Used by the /partition and /unpartition iptables handlers.
+	// Resolve network interface: use explicit flag, else auto-detect default route NIC.
+	// GCP Debian 12 uses ens4; auto-detect avoids hardcoding per-environment.
+	if *netIfaceFlag != "" {
+		netIface = *netIfaceFlag
+	} else {
+		out, err := exec.Command("bash", "-c",
+			"ip route get 8.8.8.8 2>/dev/null | awk '/dev/{for(i=1;i<=NF;i++)if($i==\"dev\")print $(i+1)}' | head -1").Output()
+		if err == nil && len(strings.TrimSpace(string(out))) > 0 {
+			netIface = strings.TrimSpace(string(out))
+		} else {
+			netIface = "eth0" // safe fallback
+		}
+	}
+	log.Printf("[agent] network interface for netem: %s", netIface)
+
+	// Parse explicit peer Raft addresses from -peer-raft-addrs flag.
+	// Format: "ip1:port1,ip2:port2,..."
+	// Extract just the port numbers for iptables --dport rules.
+	if *peerRaftAddrsFlag != "" {
+		for _, addr := range strings.Split(*peerRaftAddrsFlag, ",") {
+			addr = strings.TrimSpace(addr)
+			parts := strings.Split(addr, ":")
+			if len(parts) == 2 && parts[1] != "" {
+				peerRaftPorts = append(peerRaftPorts, parts[1])
+			}
+		}
+		log.Printf("[agent] peer raft ports from -peer-raft-addrs: %v", peerRaftPorts)
+	}
+
+	// B3: auto-parse own Raft port from "-raft=<ip>:<port>" in kv-args.
+	// Used by the /partition and /unpartition iptables INPUT rule.
 	for _, arg := range kvArgs {
 		if strings.HasPrefix(arg, "-raft=") {
-			// "-raft=10.0.0.1:12000" → split on ":" → last element is port
 			val := strings.TrimPrefix(arg, "-raft=")
 			parts := strings.Split(val, ":")
 			if len(parts) == 2 {
@@ -203,8 +232,15 @@ func main() {
 
 	// POST /partition — B3: drop Raft TCP traffic at kernel level via iptables.
 	// The process stays alive (unlike SIGSTOP) but cannot send/receive on its Raft port.
-	// This is a stricter split-brain test: the node keeps running Raft internally
-	// but is invisible to the rest of the cluster.
+	// Bidirectional: blocks both incoming AppendEntries/votes AND outgoing heartbeats.
+	//
+	// Why two rules?
+	//   INPUT  --dport raftPort : blocks peers' messages arriving at this node's Raft port.
+	//   OUTPUT --dport peerPort : blocks this node's outgoing TCP to each peer's Raft port.
+	//
+	// The OUTPUT rule must match --dport (peer's listening port), NOT --sport.
+	// When this node connects to a peer, the kernel assigns an ephemeral source port —
+	// --sport raftPort would never match those packets and heartbeats would keep flowing.
 	mux.HandleFunc("/partition", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -214,17 +250,20 @@ func main() {
 			http.Error(w, "raft port not parsed from -kv-args; cannot partition", http.StatusBadRequest)
 			return
 		}
+		// Block incoming Raft traffic to this node
 		inCmd := exec.Command("sudo", "iptables", "-I", "INPUT", "-p", "tcp", "--dport", raftPort, "-j", "DROP")
-		outCmd := exec.Command("sudo", "iptables", "-I", "OUTPUT", "-p", "tcp", "--sport", raftPort, "-j", "DROP")
 		if out, err := inCmd.CombinedOutput(); err != nil {
 			http.Error(w, fmt.Sprintf("iptables INPUT failed: %v — %s", err, out), http.StatusInternalServerError)
 			return
 		}
-		if out, err := outCmd.CombinedOutput(); err != nil {
-			http.Error(w, fmt.Sprintf("iptables OUTPUT failed: %v — %s", err, out), http.StatusInternalServerError)
-			return
+		// Block outgoing Raft traffic from this node to each peer
+		for _, peerPort := range peerRaftPorts {
+			outCmd := exec.Command("sudo", "iptables", "-I", "OUTPUT", "-p", "tcp", "--dport", peerPort, "-j", "DROP")
+			if out, err := outCmd.CombinedOutput(); err != nil {
+				log.Printf("[agent] iptables OUTPUT --dport %s warning: %v — %s", peerPort, err, out)
+			}
 		}
-		log.Printf("[agent] iptables DROP applied on Raft port %s (true network partition)", raftPort)
+		log.Printf("[agent] iptables DROP applied: INPUT dport=%s, OUTPUT dport=%v (bidirectional partition)", raftPort, peerRaftPorts)
 		w.WriteHeader(http.StatusOK)
 	})
 
@@ -238,16 +277,20 @@ func main() {
 			http.Error(w, "raft port not parsed from -kv-args", http.StatusBadRequest)
 			return
 		}
+		// Remove incoming block
 		inCmd := exec.Command("sudo", "iptables", "-D", "INPUT", "-p", "tcp", "--dport", raftPort, "-j", "DROP")
-		outCmd := exec.Command("sudo", "iptables", "-D", "OUTPUT", "-p", "tcp", "--sport", raftPort, "-j", "DROP")
 		// -D returns non-zero if the rule didn't exist — not fatal, log and continue
 		if out, err := inCmd.CombinedOutput(); err != nil {
 			log.Printf("[agent] iptables -D INPUT warning: %v — %s", err, out)
 		}
-		if out, err := outCmd.CombinedOutput(); err != nil {
-			log.Printf("[agent] iptables -D OUTPUT warning: %v — %s", err, out)
+		// Remove per-peer outgoing blocks
+		for _, peerPort := range peerRaftPorts {
+			outCmd := exec.Command("sudo", "iptables", "-D", "OUTPUT", "-p", "tcp", "--dport", peerPort, "-j", "DROP")
+			if out, err := outCmd.CombinedOutput(); err != nil {
+				log.Printf("[agent] iptables -D OUTPUT --dport %s warning: %v — %s", peerPort, err, out)
+			}
 		}
-		log.Printf("[agent] iptables DROP removed on Raft port %s (partition healed)", raftPort)
+		log.Printf("[agent] iptables DROP removed: INPUT dport=%s, OUTPUT dport=%v (partition healed)", raftPort, peerRaftPorts)
 		w.WriteHeader(http.StatusOK)
 	})
 
