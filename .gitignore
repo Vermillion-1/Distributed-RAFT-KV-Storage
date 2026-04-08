@@ -40,3 +40,23 @@ vendor/
 # Do not commit files starting with temp
 temp*
 
+# ─── Presentations & Slides ──────────────────────────────────────
+*.pptx
+make_slide*.py
+
+# ─── Binary Archives ─────────────────────────────────────────────
+bin/*.tar.gz
+
+# ─── Planning & Working Documents ────────────────────────────────
+*_TODO.md
+implementation_plan_*.md
+future_planning.md
+v1.2_Gemini_Eval.md
+26_3_2026_*.md
+sd_part5_bridge.md
+diagram_specs.md
+presentation_template.md
+presentation_reference.md
+system_design_*.md
+post_mortem_analysis.md
+project_architecture_and_complexity.md
