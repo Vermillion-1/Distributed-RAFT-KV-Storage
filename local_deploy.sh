@@ -1,11 +1,10 @@
 #!/bin/bash
-# ⚠️  RETIRED (GCP_TODO.md Block D3) — localhost only.
-# Use deploy.sh to bring up the GCP cluster, then run verify_phase*.sh from VM-0.
-# Kept in repo for local development reference only. Do NOT run on GCP.
+# local_deploy.sh — Start a 3-node Raft KV cluster on localhost for development/testing.
+# No GCP or cloud account needed. For full GCP deployment use: dynamic_deploy.sh
 set -e
 
 # Cleanup previous data and zombie processes
-killall kv-store kv-chaos 2>/dev/null || true
+killall kv-store 2>/dev/null || true
 lsof -ti:50051,50052,50053,12000,12001,12002 | xargs kill -9 2>/dev/null || true
 
 rm -rf /tmp/raft-kv/
@@ -14,7 +13,6 @@ mkdir -p /tmp/raft-kv/
 # Build binaries
 go build -o kv-store
 go build -o kv-client ./cmd/client/
-go build -o kv-chaos ./cmd/chaos/
 
 echo "Starting Node 0 (Leader)..."
 ./kv-store -id=node0 -raft=127.0.0.1:12000 -grpc=127.0.0.1:50051 -data=/tmp/raft-kv/node0 > /tmp/raft-kv/node0.log 2>&1 &
@@ -32,13 +30,17 @@ NODE2_PID=$!
 sleep 1
 
 echo "Cluster started with PIDs: $NODE0_PID, $NODE1_PID, $NODE2_PID"
-echo "Check logs at /tmp/raft-kv/nodeX.log"
-echo "You can now test client writes with './kv-client -cmd=set -key=hello -val=world'"
+echo "Logs: /tmp/raft-kv/node{0,1,2}.log"
+echo ""
+echo "Try it:"
+echo "  ./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=set -key=hello -val=world"
+echo "  ./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=get -key=hello"
+echo "  ./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=get -key=hello -follower-read"
 
 # Trap SIGINT and shutdown processes gracefully
 cleanup() {
     echo "Killing nodes..."
-    killall kv-store kv-chaos 2>/dev/null || true
+    killall kv-store 2>/dev/null || true
     lsof -ti:50051,50052,50053,12000,12001,12002 | xargs kill -9 2>/dev/null || true
     exit 0
 }
