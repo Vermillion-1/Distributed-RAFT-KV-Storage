@@ -1,5 +1,6 @@
 # Final Report — Distributed Raft KV Store
 **Course:** CMPT 756 — Fault-Tolerant Distributed Systems
+**Team:** Group 15 — Aarish, Ankith, Dhwani, Ankush
 **Date:** April 4, 2026
 **Status:** v1.3 — 37/37 tests confirmed on GCP (3-node and 5-node)
 
@@ -24,6 +25,10 @@
 15. [Bugs Discovered and Fixed](#15-bugs-discovered-and-fixed)
 16. [Known Limitations](#16-known-limitations)
 17. [Conclusion](#17-conclusion)
+
+---
+
+See also: [detailed_walkthrough.md](../detailed_walkthrough.md) for a step-by-step technical walkthrough of every system component and design decision.
 
 ---
 
@@ -889,7 +894,7 @@ f := n.raft.AddVoter(raft.ServerID(req.NodeId), raft.ServerAddress(req.RaftAddr)
 
 **Discovery:** `HeartbeatTimeout=500ms`, `ElectionTimeout=750ms` → ratio = 1.5×. HashiCorp Raft's documentation recommends ≥ 5–10×.
 
-**Decision:** Option B chosen — added code comment rather than changing the value. The 1.5× ratio is empirically validated for GCP cross-zone; changing it would require re-running the full GCP test suite and updating the timing table in the system design doc. The comment documents the trade-off explicitly, referencing `system_design_v12.md §9`.
+**Decision:** Option B chosen — added code comment rather than changing the value. The 1.5× ratio is empirically validated for GCP cross-zone (`HeartbeatTimeout=500ms`, `ElectionTimeout=750ms`); changing it would require re-running the full GCP test suite. The comment documents the trade-off explicitly: the ratio is below HashiCorp's recommended 5–10× but is stable for the observed ~15ms cross-zone RTT in `us-central1`.
 
 ---
 

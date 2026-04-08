@@ -4,6 +4,8 @@ kv-store
 kv-client
 kv-chaos
 kv-dashboard
+/agent
+/node-agent
 
 # ─── Go Build Artifacts ──────────────────────────────────────────
 /tmp/go-cache/
@@ -60,3 +62,6 @@ presentation_reference.md
 system_design_*.md
 post_mortem_analysis.md
 project_architecture_and_complexity.md
+
+# ─── Local Archive Folder ────────────────────────────────────────
+not_needed_in_main/

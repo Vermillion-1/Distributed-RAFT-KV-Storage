@@ -1,100 +1,137 @@
-<div align="center">
-  <h1>🚀 Raft KV Store & Chaos Dashboard</h1>
-  <p><i>A fault-tolerant, distributed key-value store built on HashiCorp Raft, armed with a web-based Chaos Testing Dashboard for live failure injection and real-time cluster observation.</i></p>
+# Fault-Tolerant Distributed Key-Value Store (Raft)
 
-  <!-- Badges -->
-  <a href="https://golang.org"><img src="https://img.shields.io/badge/Go-1.21+-00ADD8?style=flat&logo=go" alt="Go Version"></a>
-  <a href="https://github.com/hashicorp/raft"><img src="https://img.shields.io/badge/Consensus-Raft-blueviolet" alt="Raft Consensus"></a>
-  <img src="https://img.shields.io/badge/Reliability-Chaos%20Tested-success" alt="Chaos Tested">
-
-  <br><br>
-
-  <img src="docs/dashboard.png" alt="Raft Chaos Dashboard UI" width="800">
-
-</div>
+**Course:** CMPT 756 — Fault-Tolerant Distributed Systems
+**Team:** Group 15 — Aarish · Ankith · Dhwani · Ankush
+**Status:** v1.3 · 37/37 tests passing on GCP (April 4, 2026)
+**Language:** Go · gRPC · HashiCorp Raft v1.7.3 · BoltDB
 
 ---
 
-## 📚 Documentation
+A **CP key-value store** built on the Raft consensus algorithm, deployed and verified on Google Cloud Platform. The system achieves linearizable reads, exactly-once writes, and sub-1.5s leader failover across 3-node and 5-node GCP clusters.
 
-| # | Document | Contents |
-|---|---|---|
-| 1 | 🏃‍♂️ **[Quickstart](docs/1_QUICKSTART.md)** | Clone, build, and run the cluster |
-| 2 | 🏗️ **[Architecture](docs/2_ARCHITECTURE.md)** | System design, write/read paths, two-port layout |
-| 3 | 🛡️ **[Guarantees](docs/3_GUARANTEES.md)** | Consistency, MTTR, quorum safety, partition safety, durability |
-| 4 | 🧪 **[Tests & Results](docs/4_TESTS.md)** | All 4 test phases with results tables |
-| 5 | 📁 **[Code Overview](docs/5_CODE.md)** | Per-file deep dives (node, FSM, dashboard, chaos proxy, frontend) |
-| 🎓 | 🧊 **[Intern Guide](docs/intern/ICEBREAKER.md)** | Step-by-step onboarding for new contributors |
+**CAP position:** Consistency + Partition Tolerance. Under a network partition, the minority partition sacrifices availability rather than serve stale data. This is an intentional design choice — not a limitation.
 
 ---
 
-## ⚡ Quick Start
+## Architecture
 
-> **Prerequisites:** Go `1.21+` installed on your system.
+```
+┌─────────────── GCP VM (×3 or ×5) ───────────────┐
+│  kv-store   (Raft Replica)                        │
+│  ├── Raft TCP  :12000–12004  ← consensus          │
+│  └── gRPC      :50051–50055  ← client API         │
+│                                                    │
+│  node-agent (Sidecar)                             │
+│  └── HTTP      :9000         ← fault injection    │
+└───────────────────────────────────────────────────┘
+
+kv-client    ── smart CLI client with leader auto-redirect
+kv-dashboard ── web UI for chaos testing and cluster health
+```
+
+Each VM runs exactly two processes. The sidecar agent operates at the OS level (signals, iptables, tc netem) — independently of application logic — so fault injection cannot be accidentally bypassed by the system under test.
+
+---
+
+## Key Features
+
+| Feature | Description | Evidence |
+|---------|-------------|----------|
+| **Follower Reads (v1.3)** | Read-Index protocol: follower asks leader for `commit_index` N, waits until `appliedIndex ≥ N`, serves read locally. Linearizable reads without routing every GET to leader. | `verify_follower_read.sh` 6/6 |
+| **Exactly-Once Writes** | Per-client `(client_id, seq_num)` dedup table in FSM. Retried write after leader change is silently dropped — value never applied twice. | P5 I2/I3 PASS |
+| **Linearizable Reads (Leader)** | `VerifyLeader()` heartbeat before every GET. Deposed leader cannot serve stale data. Minority partition → reads blocked (CP enforced). | P2c, L3b, N6c PASS |
+| **Deployment Engine** | Provisions N GCP VMs, cross-compiles `linux/amd64` on macOS, SSH retry loop, bootstraps full N-node quorum in < 2 minutes. | 37/37 GCP confirmed |
+| **Sidecar Fault Injection** | Bidirectional `iptables` (INPUT+OUTPUT DROP) per Raft port. NIC auto-detect via `ip route get 8.8.8.8`. Kill, pause, partition, netem, restart. | N6a–N6c PASS |
+| **Aggressive Snapshotting** | `SnapshotThreshold=10` entries → `InstallSnapshot` RPC teleports full FSM state to any lagging replica on restart. | D3: 30 missed → 100% recovery |
+
+---
+
+## Test Results
+
+**Score: 37/37** across a 6-phase fault injection suite on GCP (3-node and 5-node).
+
+| Phase | Focus | Tests |
+|-------|-------|-------|
+| P1 — Liveness | Leader failover, MTTR (~1.25s) | L1, L3b, L1c |
+| P2 — Partitions | CP safety, minority unavailability | P2a, P2c |
+| P3 — Latency | Write throughput under follower/leader delay | R1, R2 |
+| P4 — Durability | Cluster wipe, dirty crash, snapshot catch-up | D1, D2, D3 |
+| P5 — Idempotency | Exactly-once semantics across failover | I2, I3 |
+| P6 — Kernel Chaos | iptables bidirectional partition, 6 assertions | N6a–N6f |
+
+Key performance numbers:
+
+| Metric | Value |
+|--------|-------|
+| Baseline throughput | 62.9 ops/sec (15.9 ms/op) |
+| Slow-follower throughput | 61.3 ops/sec (−2.5%, quorum bypass confirmed) |
+| Leader-fault throughput | 0.6 ops/sec (−99%, election fires — expected) |
+| MTTR (SIGKILL or iptables) | ~1.25s |
+| Key recovery ratio | 100% |
+
+---
+
+## Quick Start
+
+### Local 3-node cluster
 
 ```bash
-# 1. Build the dashboard (macOS-safe build command)
-GOCACHE=/tmp/go-cache GOTMPDIR=/tmp/gobuild go build -o kv-dashboard ./cmd/dashboard/
+# Requires Go 1.21+
+go build ./...
+./start_cluster.sh
+./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 set foo bar
+./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 get foo
+```
 
-# 2. Run a 3-node cluster
-./kv-dashboard -nodes=3 -port=8080
+### GCP deployment (full)
 
-# 3. Open the UI
-open http://localhost:8080
+```bash
+# Prerequisites: gcloud CLI authenticated, project set
+./dynamic_deploy.sh          # provisions VMs, deploys, bootstraps cluster (~2 min)
+
+# Run the full 6-phase test suite (from node0 on GCP)
+bash GCP_verify_phase1.sh
+bash GCP_verify_phase2.sh
+bash GCP_verify_phase3.sh
+bash GCP_verify_phase4.sh
+bash GCP_verify_phase5.sh
+bash GCP_verify_phase6.sh
+
+# Teardown (important — stops GCP billing)
+./teardown.sh
 ```
 
 ---
 
-## ✨ What It Does
+## Project Structure
 
-- 📦 **Distributed KV Store** — `Get`, `Set`, `Delete` operations with strong consistency via Raft consensus.
-- 🛡️ **Fault Tolerance** — Safely tolerates `⌊N/2⌋` simultaneous node failures without data loss or split-brain.
-- 🌪️ **Chaos Dashboard** — Interactive UI to kill nodes, inject network partitions (SIGSTOP), add latency, or drop packets.
-- 🕸️ **Live Topology** — HTML5 Canvas visualization of cluster state (`Leader` / `Follower` / `Dead`).
-- 🤖 **Automated Test Scripts** — `verify.sh` & `verify_phase2.sh` for proving distributed systems guarantees empirically.
-
----
-
-## 🏆 Proven Guarantees
-
-| Guarantee | Measured Result |
-|---|---|
-| **Leader MTTR** after crash | **~1 second** (Verified on 3-node and 11-node clusters) |
-| **Quorum Boundary** | **Exact `⌊N/2⌋+1`** (Safely halts writes on quorum loss) |
-| **No Split-Brain** | ✅ Proven via SIGSTOP network partition tests |
-| **Write Durability** | ✅ BoltDB persistence; survives total cluster wipe |
-| **Log Catch-up** | ✅ Full replication sync after a partition heals |
-
----
-
-## 🔥 Failure Model Coverage
-
-| Failure Type | Injection Mechanism | Status |
-|---|---|---|
-| **Crash / Fail-stop** | `SIGKILL` → `/api/kill` | ✅ Implemented |
-| **Network Partition** | `SIGSTOP` → `/api/pause` | ✅ Implemented |
-| **Receive Omission** | Sidecar Agent bidirectional `iptables DROP` | ✅ Implemented |
-| **Send Omission / Latency** | Sidecar Agent `tc netem` delay on full NIC | ✅ Implemented |
-| **Slow Node (Resource)** | Pending Phase 3 script | 🔄 Next |
-| **Durability (Total Wipe)** | Pending Phase 4 script | 🔄 Next |
-
----
-
-## 🛠️ Project Structure
-
-```text
-store/
-├── main.go              # 🟢 kv-store node entrypoint
+```
+.
+├── main.go                    # Entry point
 ├── server/
-│   ├── node.go          # 🟡 Raft setup + gRPC handlers
-│   └── fsm.go           # 🟡 Key-value FSM + snapshots
-├── proto/               # 🔵 Protobuf service definitions
+│   ├── node.go                # Raft node: leader election, log replication, FSM apply
+│   └── fsm.go                 # Finite State Machine: KV store, idempotency table, snapshots
 ├── cmd/
-│   ├── client/          # 🟣 kv-client CLI tool
-│   ├── chaos/           # 🟣 kv-chaos (deprecated — superseded by Sidecar Agent in v1.2)
-│   └── dashboard/       # 🟣 Dashboard HTTP server + frontend
-├── docs/                # 📚 All documentation & Sub-READMEs
-├── verify.sh            # 🧪 Phase 1 tests script
-├── verify_phase2.sh     # 🧪 Phase 2 tests (SIGSTOP partitions)
-└── run_chaos_test.sh    # 🧪 Integration test suite
+│   ├── client/                # kv-client CLI
+│   ├── agent/                 # node-agent sidecar (fault injection HTTP API)
+│   └── dashboard/             # kv-dashboard web UI
+├── proto/kv.proto             # gRPC service definitions
+├── GCP_verify_phase[1-6].sh   # Automated test phases
+├── dynamic_deploy.sh          # GCP cluster provisioning
+├── start_cluster.sh           # Local cluster launcher
+├── submission_docs/
+│   ├── REPORT.md              # Full technical report (955 lines)
+│   └── 756 PPT v2-proto.pptx  # Presentation slides
+└── docs/
+    ├── ARCHITECTURE.md        # Architecture defense
+    └── HOW_TO_RUN.md          # Detailed setup guide
 ```
+
+---
+
+## Documentation
+
+- **[Full Technical Report](submission_docs/REPORT.md)** — Design, implementation, bugs, performance analysis, 37/37 results
+- **[Detailed Walkthrough](detailed_walkthrough.md)** — Step-by-step guide through every system component and design decision
+- **[Architecture Overview](docs/ARCHITECTURE.md)** — Core principles and component design
+- **[How to Run](docs/HOW_TO_RUN.md)** — Detailed setup and deployment guide

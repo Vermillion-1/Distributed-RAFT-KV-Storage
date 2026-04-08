@@ -1,47 +1,64 @@
-# System Architecture: Distributed Raft KV Design Defense
+# System Architecture: Design Defense
 
-Our system is an implementation of a **Distributed, Highly-Available, and Strongly Consistent (CP)** Key-Value Store based on the Raft consensus protocol.
-
----
-
-## 🏗️ 1. Core Principles: Decentralization & Quorum
-Unlike a "Server/Client" MONOLITH, our system is entirely symmetrical. Every GCP VM runs the exact same `kv-store` binary. No single node "owns" the data; rather, they form a **3-node Quorum** (`N/2 + 1 = 2`).
-
-### Distributed Logic:
--   **No Static Leader:** If any leader dies, the other two nodes recognize the failure (via 500ms heartbeat timeout) and elect a new leader.
--   **Linearizable Consistency:** Every write is replicated to at least two nodes before the client is acknowledged.
+This document covers the core architectural decisions in the Distributed Raft KV Store (v1.3, 37/37 GCP tests).
 
 ---
 
-## 📡 2. Networking Design: The "Dual-Port" Pattern
-We solve the "Chaos vs. Control" problem by separating our networking onto two logic separate ports.
+## 1. Core Principles: Decentralization and Quorum
 
-1.  **Port 12000 (Raft Internal):** This is the high-priority "Heartbeat" port. It is only used for leader election, log replication, and configuration changes. It never touches user data directly. 
-2.  **Port 50051 (Client gRPC):** This is the user-facing API. It provides a clean gRPC interface for `Get`, `Set`, and `Delete`.
+Every GCP VM runs the same `kv-store` binary. No node permanently "owns" the data; instead, nodes form a quorum and elect a temporary leader.
 
-### Reasoning & Defense (The Prof's Question):
-*   **Why separate?** The **Sidecar Agent** can inject tc netem delays on the full network interface (affecting client gRPC traffic on port 50051) *without* breaking the underlying Raft heartbeats on port 12000. This is a crucial distinction between "Application-Level Partition" and "Infrastructure-Level Partition."
+- **Leader election:** If the current leader stops sending heartbeats (500ms timeout), followers start an election. The new leader is elected within ~750ms — total MTTR ~1.25s.
+- **Quorum commit:** A write is acknowledged only after `⌊N/2⌋ + 1` nodes confirm it. At N=3, that is 2 nodes. At N=5 (also tested and verified), that is 3 nodes.
+- **Linearizability:** Every read calls `VerifyLeader()` before returning data. A deposed leader that cannot reach the majority refuses reads rather than return stale data.
 
----
-
-## ⚡ 3. Persistence: The Write-Ahead Log (WAL)
-We use **BoltDB** for persistent on-disk storage.
--   **Why it's durable:** When a leader appends a log entry, it is `fsync`'d to the physical disk of at least two VMs. This ensures the system survives the "Total Wipeout" scenario (Phase 4).
--   **Log Compaction (Snapshots):** To prevent the Raft log from growing boundlessly, we've tuned our system to take **Binary Snapshots** after every 10 operations. This keeps memory usage constant even in high-throughput environments.
+**v1.3 addition:** Follower reads (Read-Index protocol) allow followers to serve linearizable reads locally, without routing every GET to the leader. Opt-in via `-follower-read` on the kv-client.
 
 ---
 
-## 👺 4. Fault Model & Resilience
-Our implementation addresses the exact fault model required by the **CMPT 756** rubric.
+## 2. Networking Design: Dual-Port Pattern
 
-| Fault Type | Mitigation Strategy | Verification Phase |
-| :--- | :--- | :--- |
-| **Crash-Failure** | Periodic disk-flushing via BoltDB. | **Phase 4** (Durability) |
-| **Network Partition** | Raft majority quorum selection. | **Phase 2** (Partitions) |
-| **Message Latency** | Configurable timeouts for elections and heartbeats. | **Phase 3** (Latency) |
-| **Split-Brain** | Strict Raft term-number incrementing prevents dual-leadership. | **Phase 2** (Liveness) |
+Each replica exposes two distinct port ranges:
+
+| Port range | Protocol | Traffic |
+|------------|----------|---------|
+| 12000–12004 | Raft TCP | `AppendEntries`, `RequestVote`, `InstallSnapshot`, heartbeats |
+| 50051–50055 | gRPC | `Get`, `Set`, `Delete`, `Health`, `Join` — client-facing |
+
+**Why two port ranges:** Fault injection can target one traffic type independently of the other. For example, a network partition scoped to the Raft ports simulates a pure consensus disruption, while netem delay applied to the full NIC affects client-observable latency end-to-end.
+
+Note: netem is applied to the full NIC (`tc qdisc add dev ens4 root netem delay Xms`), not scoped to individual ports. Port-scoped netem was an early bug (BUG-5) — it only delayed Raft traffic while leaving client gRPC traffic unaffected, causing latency tests to measure the wrong thing.
 
 ---
 
-## 🌍 5. GCP Cross-Zone Deployment
-Industrial distributed systems don't run in a single rack. We deploy our nodes across **3 separate availability zones** (`us-central1-a, b, c`). This protects the cluster from a physical fire or power failure in a single Google data center.
+## 3. Persistence: Write-Ahead Log and Snapshots
+
+**BoltDB** provides durable on-disk storage for both the Raft log and the KV state machine:
+
+- **Durability:** Log entries are `fsync`'d to at least `⌊N/2⌋ + 1` disks before the write is acknowledged. The system survives total cluster restarts with 100% key recovery (verified by D1).
+- **Snapshots:** A binary snapshot of the full FSM state (KV map + idempotency table) is taken every 10 committed log entries (`SnapshotThreshold=10`). This bounds log replay on restart and enables fast follower catch-up via `InstallSnapshot` RPC.
+
+---
+
+## 4. Fault Model and Resilience
+
+The system handles crash-stop and network faults. Byzantine faults (malicious nodes) are out of scope.
+
+| Fault Type | Mitigation | Verified by |
+|------------|------------|-------------|
+| Crash failure (SIGKILL) | BoltDB durability + Raft election | Phase 1 (L1), Phase 4 (D1, D2) |
+| Network partition | Quorum commit; minority partition becomes unavailable | Phase 2 (P2a, P2c), Phase 6 (N6a–N6f) |
+| Message latency | Configurable heartbeat/election timeouts; quorum bypass for slow followers | Phase 3 (R1, R2) |
+| Split-brain | Raft term numbers prevent two simultaneous leaders | Phase 6 (N6c) |
+| Process freeze (SIGSTOP) | Heartbeat timeout fires; election promotes a new leader | Phase 1 (L3b) |
+| Duplicate writes (retry after failover) | Per-client `(client_id, seq_num)` dedup table in FSM | Phase 5 (I2, I3) |
+
+---
+
+## 5. GCP Deployment
+
+The cluster is deployed across two availability zones (`us-central1-a` and `us-central1-c`) on e2-micro VMs. Cross-zone latency is approximately 15ms RTT, which informed the heartbeat/election timeout configuration (500ms heartbeat, 750ms election).
+
+Both N=3 (majority=2) and N=5 (majority=3) configurations have been fully validated with the 6-phase test suite (37/37, April 4, 2026).
+
+The sidecar agent (`node-agent`) runs alongside the replica on each VM and handles fault injection at the OS level — independently of the application — so the system under test cannot accidentally bypass or detect the fault injection.
