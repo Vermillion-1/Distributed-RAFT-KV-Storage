@@ -1,5 +1,5 @@
 #!/bin/bash
-# verify_follower_read.sh — Local 3-node test for read-index follower reads (FEAT-RI)
+# GCP_verify_phase7.sh — Phase 7: Read-Index Follower Reads (FEAT-RI, v1.3)
 #
 # Starts a 3-node local cluster, writes a key via the leader, then confirms that
 # followers with --follower-read serve the correct value without redirecting.
