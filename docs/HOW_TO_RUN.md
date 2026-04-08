@@ -6,30 +6,31 @@ This document covers how to provision, deploy, and interact with the Raft KV clu
 
 ## Prerequisites
 
-Before starting, ensure you have:
+**For local deployment (`local_deploy.sh`):**
+- **Go 1.21+** — to build binaries
 
-1. **Go 1.21+** — for building and cross-compiling binaries
-2. **gcloud CLI** — authenticated and pointing at your project:
+**For GCP deployment (`dynamic_deploy.sh`):**
+- **Go 1.21+** — for cross-compiling binaries
+- **gcloud CLI** — authenticated and pointing at your project:
    ```bash
    gcloud auth login
    gcloud config set project [YOUR_PROJECT_ID]
    ```
-3. **SSH key** — ensure your `ssh-agent` is running for automated VM access
+- **SSH key** — ensure your `ssh-agent` is running for automated VM access
 
 ---
 
-## Option A: Local 3-Node Cluster
+## Option A: Local 3-Node Cluster (no cloud account needed)
 
-The fastest way to run the system for development or testing:
+Starts a 3-node cluster entirely on `localhost`. No GCP account, no VMs, no billing. Best for quick development and testing.
 
 ```bash
-go build ./...
-./start_cluster.sh
+bash local_deploy.sh
 ```
 
-This starts 3 `kv-store` processes on `localhost` ports 50051–50053 (Raft on 12001–12003).
+The script builds `kv-store` and `kv-client`, starts 3 nodes on `localhost` ports 50051–50053 (Raft on 12000–12002), and waits. Press `Ctrl+C` to shut everything down cleanly.
 
-Interact with the cluster:
+Interact with the cluster in a separate terminal:
 
 ```bash
 # Set a key (client auto-redirects to leader if needed)
@@ -41,9 +42,11 @@ Interact with the cluster:
 # Get via follower read-index (v1.3, linearizable off-leader)
 ./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=get -key=hello -follower-read
 
-# Check node health
+# Check node health (shows leader, term, applied index)
 ./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=health
 ```
+
+Logs are written to `/tmp/raft-kv/node{0,1,2}.log` if you need to debug.
 
 ---
 
@@ -106,6 +109,7 @@ bash ~/GCP_verify_phase3.sh    # Write latency under delay
 bash ~/GCP_verify_phase4.sh    # Durability (cluster wipe, snapshots)
 bash ~/GCP_verify_phase5.sh    # Idempotency (exactly-once writes)
 bash ~/GCP_verify_phase6.sh    # Kernel chaos (iptables bidirectional partition)
+bash ~/GCP_verify_phase7.sh    # Follower reads (Read-Index, v1.3)
 ```
 
 Each script prints PASS/FAIL per test with diagnostic output. Expected result: **37/37**.
