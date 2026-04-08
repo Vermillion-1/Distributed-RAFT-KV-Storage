@@ -278,4 +278,5 @@ Phase 5 I2 verifies this: the same `(client_id=test-client-123, seq_num=999)` se
 | **Single-region deployment** | No geo-distribution; all nodes in `us-central1` | Outside course project scope |
 | **Single-leader write ceiling** | All writes serialized through one replica; no horizontal write scaling | Inherent to strong-consistency Raft; sharding required for multi-leader |
 | **No membership metrics** | MTTR for node replacement not measured | Out of scope |
+| **N=11 breaking-point test infeasible** | `us-central1` e2-micro quota exhausted; cannot provision > 5 nodes | Out of scope; N=3 and N=5 results demonstrate O(N) heartbeat scaling |
 | **Chaos Proxy deprecated** | `kv-chaos` binary still present but unused in GCP mode | Remove or document in v1.3 |

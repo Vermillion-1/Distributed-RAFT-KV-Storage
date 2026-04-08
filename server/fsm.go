@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log"
 	"sync"
@@ -24,6 +25,11 @@ type KVStore struct {
 	m           map[string]string       // The actual map holding the data
 	Peers       map[string]string       // Maps Raft Address -> gRPC Address for client redirects
 	lastApplied map[string]*clientEntry // Maps ClientID -> last applied entry (idempotency with TTL)
+
+	// read-index tracking — separate mutex so WaitForIndex never blocks concurrent Gets
+	indexMu      sync.Mutex
+	indexCond    *sync.Cond
+	appliedIndex uint64
 }
 
 // NewKVStore creates a new KVStore
@@ -33,6 +39,7 @@ func NewKVStore() *KVStore {
 		Peers:       make(map[string]string),
 		lastApplied: make(map[string]*clientEntry),
 	}
+	kv.indexCond = sync.NewCond(&kv.indexMu)
 	// Start background goroutine to evict stale client idempotency entries (older than 10 minutes).
 	// This prevents unbounded memory growth from the lastApplied map.
 	go kv.evictStaleClients(10*time.Minute, 1*time.Minute)
@@ -73,6 +80,32 @@ func (s *KVStore) GetGrpcAddr(raftAddr string) string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.Peers[raftAddr]
+}
+
+// WaitForIndex blocks until the FSM has applied at least idx, or until timeout.
+// Used by the follower read-index path to ensure the local FSM is caught up
+// before serving a linearizable read.
+func (s *KVStore) WaitForIndex(idx uint64, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	// AfterFunc wakes the cond when the timeout fires so Wait() never blocks indefinitely.
+	timer := time.AfterFunc(timeout, func() { s.indexCond.Broadcast() })
+	defer timer.Stop()
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	for s.appliedIndex < idx {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("timeout waiting for index %d (current applied: %d)", idx, s.appliedIndex)
+		}
+		s.indexCond.Wait()
+	}
+	return nil
+}
+
+// AppliedIndex returns the last Raft log index applied to this FSM.
+func (s *KVStore) AppliedIndex() uint64 {
+	s.indexMu.Lock()
+	defer s.indexMu.Unlock()
+	return s.appliedIndex
 }
 
 // isDuplicate checks if a command with the given client ID and sequence number
@@ -149,6 +182,13 @@ func (s *KVStore) Apply(l *raft.Log) interface{} {
 		log.Printf("[FSM] WARNING: unrecognized command op: %q (ignored)", c.Op)
 	}
 
+	// Update applied index for read-index reads. Done after the data write so
+	// WaitForIndex callers always see the data when they unblock.
+	s.indexMu.Lock()
+	s.appliedIndex = l.Index
+	s.indexMu.Unlock()
+	s.indexCond.Broadcast()
+
 	return nil
 }
 
@@ -170,7 +210,10 @@ func (s *KVStore) Snapshot() (raft.FSMSnapshot, error) {
 	for k, v := range s.lastApplied {
 		la[k] = v.SeqNum
 	}
-	return &fsmSnapshot{store: o, peers: p, lastApplied: la}, nil
+	s.indexMu.Lock()
+	ai := s.appliedIndex
+	s.indexMu.Unlock()
+	return &fsmSnapshot{store: o, peers: p, lastApplied: la, appliedIndex: ai}, nil
 }
 
 // Restore restores the KVStore from a snapshot
@@ -178,9 +221,10 @@ func (s *KVStore) Restore(rc io.ReadCloser) error {
 	defer rc.Close()
 
 	var snap struct {
-		Store       map[string]string `json:"store"`
-		Peers       map[string]string `json:"peers"`
-		LastApplied map[string]uint64 `json:"last_applied"`
+		Store        map[string]string `json:"store"`
+		Peers        map[string]string `json:"peers"`
+		LastApplied  map[string]uint64 `json:"last_applied"`
+		AppliedIndex uint64            `json:"applied_index"`
 	}
 
 	if err := json.NewDecoder(rc).Decode(&snap); err != nil {
@@ -202,6 +246,12 @@ func (s *KVStore) Restore(rc io.ReadCloser) error {
 			s.lastApplied[k] = &clientEntry{SeqNum: v, LastSeen: time.Now()}
 		}
 	}
+	// Restore the applied index so WaitForIndex callers don't time out on a
+	// quiescent cluster where no new Apply() calls arrive after restore.
+	s.indexMu.Lock()
+	s.appliedIndex = snap.AppliedIndex
+	s.indexMu.Unlock()
+	s.indexCond.Broadcast()
 	return nil
 }
 
@@ -216,9 +266,10 @@ type command struct {
 }
 
 type fsmSnapshot struct {
-	store       map[string]string
-	peers       map[string]string
-	lastApplied map[string]uint64
+	store        map[string]string
+	peers        map[string]string
+	lastApplied  map[string]uint64
+	appliedIndex uint64
 }
 
 // Persist writes the snapshot to a sink
@@ -226,13 +277,15 @@ func (f *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
 	err := func() error {
 		// Encode data into JSON
 		snap := struct {
-			Store       map[string]string `json:"store"`
-			Peers       map[string]string `json:"peers"`
-			LastApplied map[string]uint64 `json:"last_applied"`
+			Store        map[string]string `json:"store"`
+			Peers        map[string]string `json:"peers"`
+			LastApplied  map[string]uint64 `json:"last_applied"`
+			AppliedIndex uint64            `json:"applied_index"`
 		}{
-			Store:       f.store,
-			Peers:       f.peers,
-			LastApplied: f.lastApplied,
+			Store:        f.store,
+			Peers:        f.peers,
+			LastApplied:  f.lastApplied,
+			AppliedIndex: f.appliedIndex,
 		}
 
 		b, err := json.Marshal(snap)

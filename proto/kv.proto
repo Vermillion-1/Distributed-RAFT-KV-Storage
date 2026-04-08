@@ -9,7 +9,8 @@ service KVStore {
   rpc Set(SetRequest) returns (SetResponse);
   rpc Delete(DeleteRequest) returns (DeleteResponse);
   rpc Join(JoinRequest) returns (JoinResponse);
-  rpc Health(HealthRequest) returns (HealthResponse);   // Health Endpoint Monitoring pattern
+  rpc Health(HealthRequest) returns (HealthResponse);        // Health Endpoint Monitoring pattern
+  rpc GetReadIndex(GetReadIndexRequest) returns (GetReadIndexResponse); // Read-index follower reads
 }
 
 message JoinRequest {
@@ -25,6 +26,7 @@ message JoinResponse {
 
 message GetRequest {
   string key = 1;
+  bool follower_read = 2; // If true, follower serves read via read-index (linearizable, distributes load)
 }
 
 message GetResponse {
@@ -66,4 +68,11 @@ message HealthResponse {
   uint64 applied_index = 4;   // Last applied Raft log index
   uint32 num_peers = 5;       // Number of peers in the cluster
   uint64 term = 6;            // Current Raft term number
+}
+
+// Read-index follower reads
+message GetReadIndexRequest {}
+
+message GetReadIndexResponse {
+  uint64 commit_index = 1;  // Leader's current commit index; follower waits until applied_index >= this
 }

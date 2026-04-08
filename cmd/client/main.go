@@ -28,6 +28,7 @@ func main() {
 	val := flag.String("val", "", "Value to set")
 	addr := flag.String("addr", "", "Address of a single cluster node (DEPRECATED: use -addrs)")
 	addrs := flag.String("addrs", "", "Comma-separated addresses (e.g., node0:50051,node1:50052,node2:50053)")
+	followerRead := flag.Bool("follower-read", false, "Serve Gets from followers via read-index (linearizable, distributes read load)")
 
 	// Idempotency control flags (for testing duplicate detection)
 	explicitClientID := flag.String("client-id", "", "Explicit client ID for idempotency testing (default: auto-generated UUID)")
@@ -81,21 +82,21 @@ func main() {
 	}
 
 	// Smart client main loop with failover support
-	success := smartRequestLoop(*cmd, *key, *val, addressList)
+	success := smartRequestLoop(*cmd, *key, *val, addressList, *followerRead)
 	if !success {
 		log.Fatalf("Operation failed entirely after trying all addresses")
 	}
 }
 
 // smartRequestLoop tries each address in order until one succeeds
-func smartRequestLoop(cmd, key, val string, addresses []string) bool {
+func smartRequestLoop(cmd, key, val string, addresses []string, followerRead bool) bool {
 	maxRetries := 3
 
 	for attempt := 0; attempt < maxRetries; attempt++ {
 		for i, addr := range addresses {
 			log.Printf("Trying address %d/%d: %s", i+1, len(addresses), addr)
 
-			success, leaderAddr := sendRequest(cmd, key, val, addr)
+			success, leaderAddr := sendRequest(cmd, key, val, addr, followerRead)
 
 			if success {
 				return true
@@ -105,7 +106,7 @@ func smartRequestLoop(cmd, key, val string, addresses []string) bool {
 			if leaderAddr != "" {
 				log.Printf("Redirected to leader at %s, using it...", leaderAddr)
 				// Use leader address for next attempt
-				leaderSuccess, _ := sendRequest(cmd, key, val, leaderAddr)
+				leaderSuccess, _ := sendRequest(cmd, key, val, leaderAddr, followerRead)
 				if leaderSuccess {
 					return true
 				}
@@ -148,7 +149,7 @@ func tryHealth(addr string) bool {
 	return true
 }
 
-func sendRequest(cmd, key, val, addr string) (bool, string) {
+func sendRequest(cmd, key, val, addr string, followerRead bool) (bool, string) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		log.Printf("Failed to connect: %v", err)
@@ -163,7 +164,7 @@ func sendRequest(cmd, key, val, addr string) (bool, string) {
 
 	switch cmd {
 	case "get":
-		resp, err := c.Get(ctx, &pb.GetRequest{Key: key})
+		resp, err := c.Get(ctx, &pb.GetRequest{Key: key, FollowerRead: followerRead})
 		if err != nil {
 			log.Printf("RPC Error: %v", err)
 			return false, ""

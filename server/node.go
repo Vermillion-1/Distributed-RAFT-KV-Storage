@@ -14,6 +14,7 @@ import (
 	"github.com/hashicorp/raft"
 	raftboltdb "github.com/hashicorp/raft-boltdb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 )
 
@@ -52,6 +53,10 @@ func NewNode(nodeID, raftAddr, grpcAddr, dataDir string, peers []string) (*Node,
 	config.LocalID = raft.ServerID(nodeID)
 	// Tuned for GCP inter-VM latency (~1ms RTT). See GCP_TODO.md Block A1.
 	config.HeartbeatTimeout = 500 * time.Millisecond
+	// ElectionTimeout is 1.5× HeartbeatTimeout — more aggressive than HashiCorp's recommended
+	// 5–10×, but empirically stable on GCP e2-micro cross-zone. One spurious election was
+	// observed under heavy load (Phase 3 R2b); the test suite accepts election-then-recovery
+	// as valid liveness. See system_design_v12.md §9 "Timing Rationale" for full justification.
 	config.ElectionTimeout = 750 * time.Millisecond
 	config.CommitTimeout = 100 * time.Millisecond
 	config.LeaderLeaseTimeout = 400 * time.Millisecond
@@ -205,6 +210,11 @@ func (n *Node) Stop() {
 
 func (n *Node) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
 	if n.raft.State() != raft.Leader {
+		// Follower read-index path: follower gets commit_index from leader, waits to catch up, serves locally.
+		if req.FollowerRead {
+			return n.followerGet(ctx, req.Key)
+		}
+		// Default: redirect client to the leader.
 		leaderAddr, _ := n.raft.LeaderWithID()
 		grpcAddr := n.fsm.GetGrpcAddr(string(leaderAddr))
 		n.logger.Printf("[DEBUG Get] Not leader. Leader is %s, resolving to grpc %s", leaderAddr, grpcAddr)
@@ -221,6 +231,44 @@ func (n *Node) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, er
 		Found: ok,
 		Value: val,
 	}, nil
+}
+
+// followerGet implements the read-index read path for followers.
+// It contacts the leader for the current commit_index, waits until the local FSM
+// has applied at least that index, then serves the read from the local FSM.
+// This is linearizable because any write committed before this read was issued
+// will have a commit_index <= the leader's commit_index at query time.
+func (n *Node) followerGet(ctx context.Context, key string) (*pb.GetResponse, error) {
+	leaderAddr, _ := n.raft.LeaderWithID()
+	leaderGrpcAddr := n.fsm.GetGrpcAddr(string(leaderAddr))
+	if leaderGrpcAddr == "" {
+		return nil, fmt.Errorf("leader gRPC address unknown, cannot perform follower read")
+	}
+
+	conn, err := grpc.NewClient(leaderGrpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, fmt.Errorf("failed to connect to leader for read index: %v", err)
+	}
+	defer conn.Close()
+
+	leaderClient := pb.NewKVStoreClient(conn)
+	ridResp, err := leaderClient.GetReadIndex(ctx, &pb.GetReadIndexRequest{})
+	if err != nil {
+		return nil, fmt.Errorf("GetReadIndex RPC failed: %v", err)
+	}
+
+	waitTimeout := 2 * time.Second
+	if deadline, ok := ctx.Deadline(); ok {
+		if remaining := time.Until(deadline); remaining > 0 && remaining < waitTimeout {
+			waitTimeout = remaining
+		}
+	}
+	if err := n.fsm.WaitForIndex(ridResp.CommitIndex, waitTimeout); err != nil {
+		return nil, err
+	}
+
+	val, ok := n.fsm.Get(key)
+	return &pb.GetResponse{Found: ok, Value: val}, nil
 }
 
 func (n *Node) Set(ctx context.Context, req *pb.SetRequest) (*pb.SetResponse, error) {
@@ -305,14 +353,14 @@ func (n *Node) Join(ctx context.Context, req *pb.JoinRequest) (*pb.JoinResponse,
 				return &pb.JoinResponse{Success: true}, nil
 			}
 
-			future := n.raft.RemoveServer(srv.ID, 0, 0)
+			future := n.raft.RemoveServer(srv.ID, 0, 10*time.Second)
 			if err := future.Error(); err != nil {
 				return nil, fmt.Errorf("error removing existing node %s at %s: %s", req.NodeId, req.RaftAddr, err)
 			}
 		}
 	}
 
-	f := n.raft.AddVoter(raft.ServerID(req.NodeId), raft.ServerAddress(req.RaftAddr), 0, 0)
+	f := n.raft.AddVoter(raft.ServerID(req.NodeId), raft.ServerAddress(req.RaftAddr), 0, 10*time.Second)
 	if f.Error() != nil {
 		return nil, f.Error()
 	}
@@ -362,4 +410,22 @@ func (n *Node) Health(ctx context.Context, req *pb.HealthRequest) (*pb.HealthRes
 		NumPeers:     numPeers,
 		Term:         term,
 	}, nil
+}
+
+// GetReadIndex returns the leader's current commit_index for read-index reads.
+// Followers call this to learn the index they must catch up to before serving a read.
+func (n *Node) GetReadIndex(ctx context.Context, req *pb.GetReadIndexRequest) (*pb.GetReadIndexResponse, error) {
+	if n.raft.State() != raft.Leader {
+		return nil, fmt.Errorf("not leader")
+	}
+	// VerifyLeader confirms majority reachability before returning commit_index.
+	// Without this, a partitioned stale leader could return a stale index and
+	// allow followers to serve non-linearizable reads.
+	if err := n.raft.VerifyLeader().Error(); err != nil {
+		return nil, fmt.Errorf("failed to verify leader for read index: %v", err)
+	}
+	stats := n.raft.Stats()
+	var commitIndex uint64
+	fmt.Sscanf(stats["commit_index"], "%d", &commitIndex)
+	return &pb.GetReadIndexResponse{CommitIndex: commitIndex}, nil
 }

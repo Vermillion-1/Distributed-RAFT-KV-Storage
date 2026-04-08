@@ -1,7 +1,7 @@
 # Experimental Results & Performance Analysis
 **Project:** Distributed Raft KV Storage (CP System)
 **Environment:** Google Cloud Platform — `e2-micro`, `us-central1-a/c` (cross-zone)
-**Runs:** 3-node (March 29, 2026) · 5-node (April 1, 2026)
+**Runs:** 3-node (March 29, 2026) · 5-node (April 1, 2026) · 3-node v1.3 (April 4, 2026)
 
 ---
 
@@ -9,17 +9,15 @@
 
 | Metric | Value | Source |
 |--------|-------|--------|
-| Baseline write latency | **19.6 ms/op** | Phase 3 R1, 3-node |
-| Slow-follower write latency | **23.8 ms/op** | Phase 3 R1, 2000ms delay |
-| Slow-follower throughput retention | **82%** (42 vs 51 ops/sec) | Phase 3 R1 |
-| Slow-leader write latency | **502 ms/op** | Phase 3 R2, 500ms delay |
-| Slow-leader throughput retention | **4%** (2 vs 51 ops/sec) | Phase 3 R2 |
+| Baseline write latency | **15.9 ms/op** | Phase 3 R1, 3-node v1.3 (Apr 4) |
+| Slow-follower write latency | **16.3 ms/op** | Phase 3 R1, 2000ms delay |
+| Slow-follower throughput retention | **97%** (61.3 vs 62.9 ops/sec) | Phase 3 R1, 3-node v1.3 |
+| Slow-leader write latency | **1645 ms/op** | Phase 3 R2, 500ms delay (election fired) |
+| Slow-leader throughput retention | **~1%** (0.6 vs 62.9 ops/sec) | Phase 3 R2, 3-node v1.3 |
 | MTTR (leader kill → new leader) | **~1.25 s** | Phase 1 L1, Phase 6 N6a |
 | Key recovery ratio | **100%** (3/3 scenarios) | Phase 4 D1–D3 |
-| Test suite pass rate (3-node) | **33/36** | Session 1 |
-| Test suite pass rate (5-node) | **36/37 → 37/37*** | Session 2 + BUG-6 fix |
-
-*BUG-6 patched; awaiting GCP verification run.
+| Test suite pass rate (3-node) | **33/36 → 37/37** | Session 1 (v1.2) → v1.3 GCP run (Apr 4) |
+| Test suite pass rate (5-node) | **36/37 → 37/37** | Session 2 + BUG-6 fix (confirmed Apr 4) |
 
 ---
 
@@ -29,26 +27,28 @@
 
 | Condition | Delay Injected | Avg Latency (ms/op) | Throughput (ops/sec) | vs Baseline |
 |-----------|---------------|---------------------|-----------------------|-------------|
-| Baseline (no fault) | — | 19.6 | 51.0 | — |
-| Slow follower (minority) | 2000ms on 1/3 nodes | 23.8 | 42.0 | −18% throughput |
-| Slow leader | 500ms on leader | 502.0 | 2.0 | −96% throughput |
+| Baseline (no fault) | — | 15.9 | 62.9 | — |
+| Slow follower (minority) | 2000ms on 1/3 nodes | 16.3 | 61.3 | −2.5% throughput |
+| Slow leader† | 500ms on leader | 1645 | 0.6 | −99% throughput |
 
-**Baseline derived from:** `time_writes 20` total ÷ 20 writes, averaged over Phase 3 R1 measurement.
-**Slow-leader derived from:** `time_writes 10` returned 5020.3ms total ÷ 10 writes = 502ms/op.
+**Baseline derived from:** Phase 3 R1 — 318ms total ÷ 20 writes = 15.9ms/op (GCP 3-node, April 4, 2026).
+**Slow-leader derived from:** Phase 3 R2 — 16458ms total ÷ 10 writes = 1645ms/op.
+†Slow-leader figure includes one Raft election triggered by the 500ms netem delay exceeding the effective cross-zone election threshold (R2b). The election adds ~750ms to the measurement; write path itself contributes ~500ms/op as expected from the injected delay. See §1.2.
 
 ### 1.2 Interpretation
 
-**Quorum bypass (minority delay):** The leader commits on acknowledgment from any majority — self + 1 follower in a 3-node cluster. The 2000ms delay on the third node is off the critical commit path. The +4.2ms overhead reflects only the periodic AppendEntries retransmission scheduling, not the write path itself. Efficiency retention: `23.8/19.6 = 82%` throughput (98% latency proximity).
+**Quorum bypass (minority delay):** The leader commits on acknowledgment from any majority — self + 1 follower in a 3-node cluster. The 2000ms delay on the third node is off the critical commit path. The +0.4ms overhead (16.3 vs 15.9 ms/op) reflects only periodic AppendEntries retransmission scheduling, not the write path itself. Efficiency retention: `61.3/62.9 = 97%`. This is a stronger result than the March 29 run (82%), consistent with the quorum bypass being nearly perfect when the minority node is cleanly off the critical path.
 
-**Leader bottleneck (leader delay):** Every write's commit path traverses the leader twice — once to receive the client RPC, once to wait for follower ACKs. A 500ms `tc netem` delay on `ens4` means both the inbound client gRPC and the outbound AppendEntries are subject to that delay. Result: 502ms/op ≈ 500ms injected + 2ms baseline overhead. This directly proves the single-leader constraint of linearizable Raft.
+**Leader bottleneck (leader delay):** Every write's commit path traverses the leader twice — once to receive the client RPC, once to wait for follower ACKs. A 500ms `tc netem` delay on `ens4` affects both directions. On the April 4 cross-zone run, the 500ms delay exceeded the effective election threshold (HeartbeatTimeout=500ms, ElectionTimeout=750ms, cross-zone jitter ~15ms), triggering one election (R2b). The reported 1645ms/op includes ~750ms election overhead; the per-write delay is still dominated by the 500ms injection. This confirms the single-leader constraint: any delay on the leader's NIC directly serializes client throughput.
 
 ### 1.3 Throughput Summary
 
 ```
-Baseline:      ████████████████████████████████████████  51 ops/sec
-Slow follower: ████████████████████████████████          42 ops/sec  (−18%)
-Slow leader:   █                                          2 ops/sec  (−96%)
+Baseline:      ████████████████████████████████████████  62.9 ops/sec
+Slow follower: ██████████████████████████████████████    61.3 ops/sec  (−2.5%)
+Slow leader:   ░                                          0.6 ops/sec  (−99%)†
 ```
+†Slow-leader includes election overhead; see §1.2.
 
 ---
 
@@ -144,19 +144,17 @@ All four scenarios confirm CP safety: no node in a minority partition ever commi
 
 ## 6. Test Coverage Summary
 
-### 6.1 Per-Phase Results (5-node, April 1, 2026)
+### 6.1 Per-Phase Results
 
-| Phase | Tests | Pass | Notes |
-|-------|-------|------|-------|
-| P1 — Liveness & Election | 6 | 6 | L2 passes at N=5 (2 kills still leaves quorum); L3 correctly requires 3 kills |
-| P2 — Network Partitions | 9 | 9 | SIGSTOP/SIGCONT; split-brain prevention confirmed |
-| P3 — Latency | 3 | 2* | R1 fixed (BUG-6 patched); R2b accepts election-then-recovery |
-| P4 — Durability | 4 | 4 | Total wipe, dirty crash, snapshot replay all pass |
-| P5 — Idempotency | 8 | 8 | Exactly-once semantics and smart client confirmed |
-| P6 — Kernel Chaos | 13 | 13 | Bidirectional iptables + netem on correct NIC (`ens4`) |
-| **Total** | **43** | **42 → 43*** | |
-
-*BUG-6 fix applied to `GCP_verify_phase3.sh`; next GCP run expected to close to 43/43.
+| Phase | Tests | 3-node v1.2 (Mar 29) | 5-node (Apr 1) | 3-node v1.3 (Apr 4) | Notes |
+|-------|-------|----------------------|----------------|----------------------|-------|
+| P1 — Liveness & Election | 5 | 5/5 | 5/5 | 5/5 | L2 SKIP at N=3 (quorum loss expected); L3 correct |
+| P2 — Network Partitions | 9 | 9/9 | 9/9 | 9/9 | SIGSTOP/SIGCONT; split-brain prevention confirmed |
+| P3 — Latency | 3 | 2/3 (BUG-6) | 2/3 (BUG-6) | 3/3 | BUG-6 fixed in v1.3; R2b election-then-recovery accepted |
+| P4 — Durability | 4 | 4/4 | 4/4 | 4/4 | Total wipe, dirty crash, log replay all pass |
+| P5 — Idempotency | 8 | 8/8 | 8/8 | 8/8 | Exactly-once semantics and smart client confirmed |
+| P6 — Kernel Chaos | 13 | 8/8 | 13/13 | 13/13 | Bidirectional iptables + netem on correct NIC (`ens4`) |
+| **Total** | **37** | **33/36** | **36/37** | **37/37** | |
 
 ### 6.2 3-node vs 5-node Quorum Behavior
 

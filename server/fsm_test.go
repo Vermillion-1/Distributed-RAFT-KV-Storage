@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/raft"
 )
@@ -318,4 +319,124 @@ func (m *mockSink) Cancel() error {
 
 func (m *mockSink) ID() string {
 	return "mock-snapshot"
+}
+
+// --- Read-Index: appliedIndex tracking ---
+
+// makeLogIdx creates a raft.Log with an explicit Raft log index (needed for read-index tests).
+func makeLogIdx(op, key, value, clientID string, seqNum uint64, index uint64) *raft.Log {
+	c := command{Op: op, Key: key, Value: value, ClientID: clientID, SeqNum: seqNum}
+	b, _ := json.Marshal(c)
+	return &raft.Log{Data: b, Index: index}
+}
+
+// TestAppliedIndexTracking verifies that Apply() updates AppliedIndex() with the log's Index field.
+func TestAppliedIndexTracking(t *testing.T) {
+	kv := NewKVStore()
+
+	kv.Apply(makeLogIdx("set", "k", "v1", "", 0, 1))
+	if got := kv.AppliedIndex(); got != 1 {
+		t.Fatalf("expected appliedIndex=1, got %d", got)
+	}
+	kv.Apply(makeLogIdx("set", "k", "v2", "", 0, 2))
+	if got := kv.AppliedIndex(); got != 2 {
+		t.Fatalf("expected appliedIndex=2, got %d", got)
+	}
+	kv.Apply(makeLogIdx("set", "k", "v3", "", 0, 3))
+	if got := kv.AppliedIndex(); got != 3 {
+		t.Fatalf("expected appliedIndex=3, got %d", got)
+	}
+}
+
+// TestWaitForIndexImmediate verifies that WaitForIndex returns immediately when the FSM
+// is already at or past the requested index.
+func TestWaitForIndexImmediate(t *testing.T) {
+	kv := NewKVStore()
+
+	kv.Apply(makeLogIdx("set", "k", "v", "", 0, 5))
+
+	if err := kv.WaitForIndex(3, 1*time.Second); err != nil {
+		t.Fatalf("WaitForIndex(3) should succeed immediately when at index 5: %v", err)
+	}
+	if err := kv.WaitForIndex(5, 1*time.Second); err != nil {
+		t.Fatalf("WaitForIndex(5) should succeed immediately when at index 5: %v", err)
+	}
+}
+
+// TestWaitForIndexTimeout verifies that WaitForIndex returns an error when no Apply()
+// calls arrive within the deadline.
+func TestWaitForIndexTimeout(t *testing.T) {
+	kv := NewKVStore()
+
+	// No Apply calls — FSM stays at index 0 forever.
+	err := kv.WaitForIndex(5, 100*time.Millisecond)
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+}
+
+// TestWaitForIndexCatchUp verifies that a goroutine blocked in WaitForIndex unblocks
+// once Apply() calls bring the FSM up to the required index.
+func TestWaitForIndexCatchUp(t *testing.T) {
+	kv := NewKVStore()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- kv.WaitForIndex(3, 2*time.Second)
+	}()
+
+	// Small delay to let the goroutine enter WaitForIndex and block.
+	time.Sleep(20 * time.Millisecond)
+
+	kv.Apply(makeLogIdx("set", "k", "v1", "", 0, 1))
+	kv.Apply(makeLogIdx("set", "k", "v2", "", 0, 2))
+	kv.Apply(makeLogIdx("set", "k", "v3", "", 0, 3))
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("WaitForIndex should have succeeded after catch-up: %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatal("WaitForIndex did not unblock after Apply() catch-up")
+	}
+}
+
+// TestSnapshotRestoreAppliedIdx verifies that appliedIndex is persisted in the snapshot
+// and correctly restored, so WaitForIndex works on a fresh KVStore after restore.
+func TestSnapshotRestoreAppliedIdx(t *testing.T) {
+	kv := NewKVStore()
+
+	// Apply logs up to index 7.
+	for i := uint64(1); i <= 7; i++ {
+		kv.Apply(makeLogIdx("set", "k", "v", "", 0, i))
+	}
+	if got := kv.AppliedIndex(); got != 7 {
+		t.Fatalf("expected appliedIndex=7 before snapshot, got %d", got)
+	}
+
+	// Snapshot and serialize.
+	snap, err := kv.Snapshot()
+	if err != nil {
+		t.Fatalf("snapshot failed: %v", err)
+	}
+	var buf bytes.Buffer
+	sink := &mockSink{Writer: &buf}
+	if err := snap.Persist(sink); err != nil {
+		t.Fatalf("persist failed: %v", err)
+	}
+
+	// Restore into a fresh KVStore.
+	kv2 := NewKVStore()
+	if err := kv2.Restore(io.NopCloser(&buf)); err != nil {
+		t.Fatalf("restore failed: %v", err)
+	}
+
+	if got := kv2.AppliedIndex(); got != 7 {
+		t.Fatalf("expected appliedIndex=7 after restore, got %d", got)
+	}
+	// WaitForIndex(7) should return immediately.
+	if err := kv2.WaitForIndex(7, 100*time.Millisecond); err != nil {
+		t.Fatalf("WaitForIndex(7) should succeed immediately after restore: %v", err)
+	}
 }
