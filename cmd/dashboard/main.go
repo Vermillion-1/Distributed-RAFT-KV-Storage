@@ -201,7 +201,7 @@ func (m *Manager) KillNode(nodeID string) error {
 		if err := m.agentPost(nodeID, "kill"); err != nil {
 			return fmt.Errorf("agent kill failed: %w", err)
 		}
-		m.log("error", fmt.Sprintf("💀 KILLED node %s via agent (GCP mode)", nodeID))
+		m.log("error", fmt.Sprintf("KILLED node %s via agent (GCP mode)", nodeID))
 		return nil
 	}
 	m.mu.Lock()
@@ -216,7 +216,7 @@ func (m *Manager) KillNode(nodeID string) error {
 	if err := np.cmd.Process.Kill(); err != nil {
 		return err
 	}
-	m.log("error", fmt.Sprintf("💀 KILLED node %s (Crash/Fail-stop failure)", nodeID))
+	m.log("error", fmt.Sprintf("KILLED node %s (Crash/Fail-stop failure)", nodeID))
 	return nil
 }
 
@@ -229,7 +229,7 @@ func (m *Manager) PauseNode(nodeID string) error {
 		if err := m.agentPost(nodeID, "pause"); err != nil {
 			return fmt.Errorf("agent pause failed: %w", err)
 		}
-		m.log("warn", fmt.Sprintf("⏸️  PAUSED node %s via agent (GCP mode — SIGSTOP)", nodeID))
+		m.log("warn", fmt.Sprintf("PAUSED node %s via agent (GCP mode — SIGSTOP)", nodeID))
 		return nil
 	}
 	m.mu.Lock()
@@ -244,7 +244,7 @@ func (m *Manager) PauseNode(nodeID string) error {
 	if err := np.cmd.Process.Signal(syscall.SIGSTOP); err != nil {
 		return err
 	}
-	m.log("warn", fmt.Sprintf("⏸️  PAUSED node %s (SIGSTOP — simulating network partition)", nodeID))
+	m.log("warn", fmt.Sprintf("PAUSED node %s (SIGSTOP — simulating network partition)", nodeID))
 	return nil
 }
 
@@ -256,7 +256,7 @@ func (m *Manager) ResumeNode(nodeID string) error {
 		if err := m.agentPost(nodeID, "resume"); err != nil {
 			return fmt.Errorf("agent resume failed: %w", err)
 		}
-		m.log("success", fmt.Sprintf("▶️  RESUMED node %s via agent (GCP mode — SIGCONT)", nodeID))
+		m.log("success", fmt.Sprintf("RESUMED node %s via agent (GCP mode — SIGCONT)", nodeID))
 		return nil
 	}
 	m.mu.Lock()
@@ -271,7 +271,7 @@ func (m *Manager) ResumeNode(nodeID string) error {
 	if err := np.cmd.Process.Signal(syscall.SIGCONT); err != nil {
 		return err
 	}
-	m.log("success", fmt.Sprintf("▶️  RESUMED node %s (SIGCONT — partition healed)", nodeID))
+	m.log("success", fmt.Sprintf("RESUMED node %s (SIGCONT — partition healed)", nodeID))
 	return nil
 }
 
@@ -282,7 +282,7 @@ func (m *Manager) PartitionNode(nodeID string) error {
 		if err := m.agentPost(nodeID, "partition"); err != nil {
 			return fmt.Errorf("agent partition failed: %w", err)
 		}
-		m.log("warn", fmt.Sprintf("🔒 PARTITIONED node %s via agent (iptables — true network partition)", nodeID))
+		m.log("warn", fmt.Sprintf("PARTITIONED node %s via agent (iptables — true network partition)", nodeID))
 		return nil
 	}
 	return fmt.Errorf("partition requires agent mode (GCP)")
@@ -294,7 +294,7 @@ func (m *Manager) UnpartitionNode(nodeID string) error {
 		if err := m.agentPost(nodeID, "unpartition"); err != nil {
 			return fmt.Errorf("agent unpartition failed: %w", err)
 		}
-		m.log("success", fmt.Sprintf("🔓 UNPARTITIONED node %s (iptables rules removed)", nodeID))
+		m.log("success", fmt.Sprintf("UNPARTITIONED node %s (iptables rules removed)", nodeID))
 		return nil
 	}
 	return fmt.Errorf("unpartition requires agent mode (GCP)")
@@ -320,7 +320,7 @@ func (m *Manager) ApplyNetem(nodeID, delay, loss, jitter string) error {
 			}
 			desc += "loss=" + loss + "%"
 		}
-		m.log("warn", fmt.Sprintf("🌩️  NETEM applied on %s: %s", nodeID, desc))
+		m.log("warn", fmt.Sprintf("NETEM applied on %s: %s", nodeID, desc))
 		return nil
 	}
 	return fmt.Errorf("netem requires agent mode (GCP)")
@@ -332,7 +332,7 @@ func (m *Manager) RemoveNetem(nodeID string) error {
 		if err := m.agentPost(nodeID, "unnetem"); err != nil {
 			return fmt.Errorf("agent unnetem failed: %w", err)
 		}
-		m.log("success", fmt.Sprintf("✅ NETEM removed on %s (network normal)", nodeID))
+		m.log("success", fmt.Sprintf("NETEM removed on %s (network normal)", nodeID))
 		return nil
 	}
 	return fmt.Errorf("unnetem requires agent mode (GCP)")
@@ -344,7 +344,7 @@ func (m *Manager) RestartNode(nodeID string) error {
 		if err := m.agentPost(nodeID, "restart"); err != nil {
 			return fmt.Errorf("agent restart failed: %w", err)
 		}
-		m.log("success", fmt.Sprintf("♻️  RESTARTED node %s via agent (GCP mode)", nodeID))
+		m.log("success", fmt.Sprintf("RESTARTED node %s via agent (GCP mode)", nodeID))
 		return nil
 	}
 	m.mu.Lock()
@@ -526,7 +526,7 @@ func (m *Manager) StartChaosProxy(nodeID string, dropRate float64, delayMs int) 
 	if delayMs > 0 {
 		desc += fmt.Sprintf(" delay=%dms", delayMs)
 	}
-	m.log("warn", fmt.Sprintf("🌩️  Chaos proxy started for %s (%s) → proxy at %s", nodeID, desc, listenAddr))
+	m.log("warn", fmt.Sprintf("Chaos proxy started for %s (%s) → proxy at %s", nodeID, desc, listenAddr))
 	return nil
 }
 
@@ -542,7 +542,7 @@ func (m *Manager) StopChaosProxy(nodeID string) {
 	}
 	m.mu.Unlock()
 	if ok {
-		m.log("info", fmt.Sprintf("✅ Chaos proxy removed for %s", nodeID))
+		m.log("info", fmt.Sprintf("Chaos proxy removed for %s", nodeID))
 	}
 }
 
@@ -949,7 +949,7 @@ func main() {
 	})
 
 	addr := fmt.Sprintf(":%d", *port)
-	log.Printf("🚀 Chaos Dashboard running at http://localhost%s", addr)
+	log.Printf("Chaos Dashboard running at http://localhost%s", addr)
 	if err := http.ListenAndServe(addr, mux); err != nil {
 		log.Fatal(err)
 	}

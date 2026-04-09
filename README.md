@@ -2,7 +2,7 @@
 
 **Course:** CMPT 756 — Fault-Tolerant Distributed Systems
 **Team:** Group 15 — Aarish · Ankith · Dhwani · Ankush
-**Status:** v1.3 · 37/37 tests passing on GCP (April 4, 2026)
+**Status:** v1.3 · 43/43 tests passing on GCP (April 4, 2026)
 **Language:** Go · gRPC · HashiCorp Raft v1.7.3 · BoltDB
 
 ---
@@ -91,13 +91,14 @@ bash local_deploy.sh
 # Prerequisites: gcloud CLI authenticated, project set
 ./dynamic_deploy.sh          # provisions VMs, deploys, bootstraps cluster (~2 min)
 
-# Run the full 6-phase test suite (from node0 on GCP)
+# Run the full test suite (from node0 on GCP)
 bash GCP_verify_phase1.sh
 bash GCP_verify_phase2.sh
 bash GCP_verify_phase3.sh
 bash GCP_verify_phase4.sh
 bash GCP_verify_phase5.sh
 bash GCP_verify_phase6.sh
+bash GCP_verify_phase7.sh   # follower reads (v1.3)
 
 # Teardown (important — stops GCP billing)
 ./teardown.sh
@@ -121,9 +122,6 @@ bash GCP_verify_phase6.sh
 ├── GCP_verify_phase[1-7].sh   # Automated test phases (43 tests total)
 ├── dynamic_deploy.sh          # GCP cluster provisioning
 ├── local_deploy.sh            # Local 3-node cluster launcher
-├── submission_docs/
-│   ├── REPORT.md              # Full technical report (955 lines)
-│   └── 756 PPT v2-proto.pptx  # Presentation slides
 └── docs/
     ├── ARCHITECTURE.md        # Architecture defense
     └── HOW_TO_RUN.md          # Detailed setup guide
@@ -133,7 +131,6 @@ bash GCP_verify_phase6.sh
 
 ## Documentation
 
-- **[Full Technical Report](submission_docs/REPORT.md)** — Design, implementation, bugs, performance analysis, 37/37 results
 - **[Detailed Walkthrough](detailed_walkthrough.md)** — Step-by-step guide through every system component and design decision
 - **[Architecture Overview](docs/ARCHITECTURE.md)** — Core principles and component design
 - **[How to Run](docs/HOW_TO_RUN.md)** — Detailed setup and deployment guide

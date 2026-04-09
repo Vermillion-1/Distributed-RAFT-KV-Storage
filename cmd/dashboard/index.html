@@ -425,13 +425,13 @@
 
         <!-- Topology -->
         <div class="panel" id="topology-panel">
-            <div class="panel-header"><span class="icon">🔵</span> Cluster Topology</div>
+            <div class="panel-header">Cluster Topology</div>
             <canvas id="topology-canvas"></canvas>
         </div>
 
         <!-- Controls -->
         <div class="panel" id="controls-panel">
-            <div class="panel-header"><span class="icon">⚡</span> Chaos Controls</div>
+            <div class="panel-header">Chaos Controls</div>
 
             <div class="btn-row">
                 <label for="node-select">Target Node:</label>
@@ -441,33 +441,33 @@
             </div>
 
             <div class="controls-grid">
-                <button class="btn danger" id="btn-kill-leader">💀 Kill Leader</button>
-                <button class="btn danger" id="btn-kill-node">🎯 Kill Node</button>
-                <button class="btn success" id="btn-restart-node">♻️ Restart Node</button>
-                <button class="btn warn" id="btn-drop-packets">📵 Drop Packets</button>
-                <button class="btn warn" id="btn-add-latency">🐢 Add Latency</button>
-                <button class="btn" id="btn-stop-chaos">✅ Stop Chaos</button>
-                <button class="btn partition" id="btn-pause-node">⏸ Pause Node</button>
-                <button class="btn success" id="btn-resume-node">▶ Resume Node</button>
-                <button class="btn" id="btn-refresh-log">📄 View Node Log</button>
+                <button class="btn danger" id="btn-kill-leader">Kill Leader</button>
+                <button class="btn danger" id="btn-kill-node">Kill Node</button>
+                <button class="btn success" id="btn-restart-node">Restart Node</button>
+                <button class="btn warn" id="btn-drop-packets">Drop Packets</button>
+                <button class="btn warn" id="btn-add-latency">Add Latency</button>
+                <button class="btn" id="btn-stop-chaos">Stop Chaos</button>
+                <button class="btn partition" id="btn-pause-node">Pause Node</button>
+                <button class="btn success" id="btn-resume-node">Resume Node</button>
+                <button class="btn" id="btn-refresh-log">View Node Log</button>
             </div>
 
             <!-- Netem Controls (Real Network Chaos) -->
             <div class="panel-header" style="margin-top: 8px; border-top: 1px solid var(--border); padding-top: 12px;">
-                <span class="icon">🌩️</span> Real Network Chaos (Kernel-Level)
+                Real Network Chaos (Kernel-Level)
             </div>
             <div class="controls-grid">
-                <button class="btn danger" id="btn-partition-node">🔒 Partition (iptables)</button>
-                <button class="btn success" id="btn-unpartition-node">🔓 Unpartition</button>
-                <button class="btn warn" id="btn-netem-delay">⏱️ Netem Delay</button>
-                <button class="btn warn" id="btn-netem-loss">📦 Netem Loss</button>
-                <button class="btn success" id="btn-stop-netem">✅ Stop Netem</button>
-                <button class="btn purple" id="btn-reset-all-chaos" style="grid-column: span 2;">🔄 Reset ALL Chaos</button>
+                <button class="btn danger" id="btn-partition-node">Partition (iptables)</button>
+                <button class="btn success" id="btn-unpartition-node">Unpartition</button>
+                <button class="btn warn" id="btn-netem-delay">Netem Delay</button>
+                <button class="btn warn" id="btn-netem-loss">Netem Loss</button>
+                <button class="btn success" id="btn-stop-netem">Stop Netem</button>
+                <button class="btn purple" id="btn-reset-all-chaos" style="grid-column: span 2;">Reset ALL Chaos</button>
             </div>
 
             <!-- KV Operations Panel -->
             <div class="panel-header" style="margin-top: 8px; border-top: 1px solid var(--border); padding-top: 12px;">
-                <span class="icon">🔑</span> KV Operations (Direct Dashboard)
+                KV Operations (Direct Dashboard)
             </div>
             <div style="padding: 8px;">
                 <div style="display: flex; gap: 8px; margin-bottom: 8px;">
@@ -488,7 +488,7 @@
 
             <!-- Health -->
             <div class="panel" id="health-panel">
-                <div class="panel-header"><span class="icon">💚</span> Cluster Health</div>
+                <div class="panel-header">Cluster Health</div>
                 <div class="metric-list">
                     <div class="metric"><span class="metric-key">Leader</span> <span class="metric-val blue"
                             id="m-leader">—</span></div>
@@ -506,7 +506,7 @@
             <!-- Event Log -->
             <div class="panel" id="log-panel">
                 <div class="panel-header">
-                    <span class="icon">📋</span> Event Log
+                    Event Log
                     <button class="log-clear-btn" id="btn-clear-log" style="margin-left:auto">Clear</button>
                 </div>
                 <div id="event-log"></div>
@@ -514,7 +514,7 @@
 
             <!-- Node Log Drawer -->
             <div class="panel" id="node-log-panel">
-                <div class="panel-header"><span class="icon">🗂️</span> Node Log (<span id="node-log-label">none</span>)
+                <div class="panel-header">Node Log (<span id="node-log-label">none</span>)
                 </div>
                 <div id="node-log-output">Select a node and click "View Node Log"</div>
             </div>
@@ -761,13 +761,13 @@
         // BUTTON HANDLERS
         // ═══════════════════════════════════════════════════════
         async function apiPost(url, msg) {
-            appendEvent({ time: ts(), level: 'warn', message: '⏳ ' + msg });
+            appendEvent({ time: ts(), level: 'warn', message: msg });
             try {
                 const res = await fetch(url, { method: 'POST' });
                 const body = await res.json().catch(() => ({}));
                 if (!res.ok) throw new Error(body.error || 'HTTP ' + res.status);
             } catch (err) {
-                appendEvent({ time: ts(), level: 'error', message: '❌ ' + err.message });
+                appendEvent({ time: ts(), level: 'error', message: err.message });
             }
         }
 
@@ -779,7 +779,7 @@
 
         document.getElementById('btn-kill-leader').addEventListener('click', async () => {
             const leader = liveNodes.find(n => n.alive && n.state === 'Leader');
-            if (!leader) { appendEvent({ time: ts(), level: 'error', message: '❌ No live leader found' }); return; }
+            if (!leader) { appendEvent({ time: ts(), level: 'error', message: 'No live leader found' }); return; }
             killTime = Date.now();
             await apiPost(`/api/kill/${leader.config.id}`, `Killing leader: ${leader.config.id} (Crash failure)`);
         });
@@ -813,12 +813,12 @@
         document.getElementById('btn-pause-node').addEventListener('click', async () => {
             const id = selectedNode(); if (!id) return;
             killTime = Date.now(); // start MTTR timer — partition is like a kill from cluster PoV
-            await apiPost(`/api/pause/${id}`, `⏸ PAUSED ${id} (SIGSTOP — simulating network partition)`);
+            await apiPost(`/api/pause/${id}`, `PAUSED ${id} (SIGSTOP — simulating network partition)`);
         });
 
         document.getElementById('btn-resume-node').addEventListener('click', async () => {
             const id = selectedNode(); if (!id) return;
-            await apiPost(`/api/resume/${id}`, `▶ RESUMED ${id} (SIGCONT — partition healed, catching up)`);
+            await apiPost(`/api/resume/${id}`, `RESUMED ${id} (SIGCONT — partition healed, catching up)`);
         });
 
         document.getElementById('btn-refresh-log').addEventListener('click', async () => {
@@ -838,12 +838,12 @@
         // Real Network Chaos (Kernel-Level) - iptables partition
         document.getElementById('btn-partition-node').addEventListener('click', async () => {
             const id = selectedNode(); if (!id) return;
-            await apiPost(`/api/partition/${id}`, `🔒 PARTITIONED ${id} (iptables — drops ALL Raft traffic)`);
+            await apiPost(`/api/partition/${id}`, `PARTITIONED ${id} (iptables — drops ALL Raft traffic)`);
         });
 
         document.getElementById('btn-unpartition-node').addEventListener('click', async () => {
             const id = selectedNode(); if (!id) return;
-            await apiPost(`/api/unpartition/${id}`, `🔓 UNPARTITIONED ${id} (iptables rules removed)`);
+            await apiPost(`/api/unpartition/${id}`, `UNPARTITIONED ${id} (iptables rules removed)`);
         });
 
         // Netem controls - add real network latency/loss
@@ -853,7 +853,7 @@
             if (!delay) return;
             const jitter = prompt('Enter jitter in ms (optional, e.g., 50):', '50') || '';
             const url = `/api/chaos/netem/${id}?delay=${delay}&jitter=${jitter}`;
-            await apiPost(url, `⏱️ NETEM delay=${delay}ms${jitter ? '±'+jitter+'ms' : ''} on ${id} (kernel-level)`);
+            await apiPost(url, `NETEM delay=${delay}ms${jitter ? '±'+jitter+'ms' : ''} on ${id} (kernel-level)`);
         });
 
         document.getElementById('btn-netem-loss').addEventListener('click', async () => {
@@ -865,18 +865,18 @@
             if (delay) {
                 url += `&delay=${delay}`;
             }
-            await apiPost(url, `📦 NETEM loss=${loss}%${delay ? ', delay='+delay+'ms' : ''} on ${id} (kernel-level)`);
+            await apiPost(url, `NETEM loss=${loss}%${delay ? ', delay='+delay+'ms' : ''} on ${id} (kernel-level)`);
         });
 
         document.getElementById('btn-stop-netem').addEventListener('click', async () => {
             const id = selectedNode(); if (!id) return;
-            await apiPost(`/api/chaos/unnetem/${id}`, `✅ NETEM removed on ${id} (network normal)`);
+            await apiPost(`/api/chaos/unnetem/${id}`, `NETEM removed on ${id} (network normal)`);
         });
 
         // Reset ALL Chaos - clean up everything on selected node
         document.getElementById('btn-reset-all-chaos').addEventListener('click', async () => {
             const id = selectedNode(); if (!id) return;
-            appendEvent({ time: ts(), level: 'info', message: `🔄 Resetting ALL chaos on ${id}...` });
+            appendEvent({ time: ts(), level: 'info', message: `Resetting ALL chaos on ${id}...` });
             
             // 1. Stop kv-chaos proxy
             await fetch(`/api/chaos/stop/${id}`, { method: 'POST' }).catch(() => {});
@@ -887,85 +887,85 @@
             // 4. Resume if paused
             await fetch(`/api/resume/${id}`, { method: 'POST' }).catch(() => {});
             
-            appendEvent({ time: ts(), level: 'success', message: `✅ ALL chaos reset on ${id} - netem removed, partition healed, paused resumed` });
+            appendEvent({ time: ts(), level: 'success', message: `ALL chaos reset on ${id} - netem removed, partition healed, paused resumed` });
         });
 
         // KV Operations via Dashboard
         document.getElementById('btn-kv-set').addEventListener('click', async () => {
             const key = document.getElementById('kv-key').value.trim();
             const val = document.getElementById('kv-value').value.trim();
-            if (!key) { document.getElementById('kv-result').textContent = '⚠️ Key required'; return; }
-            if (!val) { document.getElementById('kv-result').textContent = '⚠️ Value required'; return; }
-            
+            if (!key) { document.getElementById('kv-result').textContent = 'Key required'; return; }
+            if (!val) { document.getElementById('kv-result').textContent = 'Value required'; return; }
+
             const resultDiv = document.getElementById('kv-result');
-            resultDiv.textContent = '⏳ Setting...';
+            resultDiv.textContent = 'Setting...';
             
             // Get cluster to find leader
             try {
                 const clusterRes = await fetch('/api/cluster');
                 const cluster = await clusterRes.json();
                 const leader = cluster.nodes.find(n => n.state === 'Leader');
-                if (!leader) { resultDiv.textContent = '⚠️ No leader found'; return; }
-                
+                if (!leader) { resultDiv.textContent = 'No leader found'; return; }
+
                 const leaderAddr = leader.config.grpc_addr;
                 // Use kv-client approach - call gRPC via dashboard proxy or direct
                 // For simplicity, we'll use fetch to call the gRPC service via a new endpoint
                 // Actually, let's add a simple API endpoint for KV ops
                 const res = await fetch(`/api/kv/set?key=${encodeURIComponent(key)}&val=${encodeURIComponent(val)}&addr=${encodeURIComponent(leaderAddr)}`, { method: 'POST' });
                 const data = await res.json();
-                resultDiv.textContent = data.success ? `✅ SET ${key}=${val}` : `❌ ${data.error || 'Failed'}`;
+                resultDiv.textContent = data.success ? `SET ${key}=${val}` : `${data.error || 'Failed'}`;
                 appendEvent({ time: ts(), level: data.success ? 'success' : 'error', message: `KV SET ${key}=${val}: ${data.success ? 'OK' : 'FAILED'}` });
             } catch (e) {
-                resultDiv.textContent = `❌ Error: ${e.message}`;
+                resultDiv.textContent = `Error: ${e.message}`;
             }
         });
 
         document.getElementById('btn-kv-get').addEventListener('click', async () => {
             const key = document.getElementById('kv-key').value.trim();
-            if (!key) { document.getElementById('kv-result').textContent = '⚠️ Key required'; return; }
-            
+            if (!key) { document.getElementById('kv-result').textContent = 'Key required'; return; }
+
             const resultDiv = document.getElementById('kv-result');
-            resultDiv.textContent = '⏳ Getting...';
+            resultDiv.textContent = 'Getting...';
             
             try {
                 const clusterRes = await fetch('/api/cluster');
                 const cluster = await clusterRes.json();
                 const leader = cluster.nodes.find(n => n.state === 'Leader');
-                if (!leader) { resultDiv.textContent = '⚠️ No leader found'; return; }
-                
+                if (!leader) { resultDiv.textContent = 'No leader found'; return; }
+
                 const leaderAddr = leader.config.grpc_addr;
                 const res = await fetch(`/api/kv/get?key=${encodeURIComponent(key)}&addr=${encodeURIComponent(leaderAddr)}`);
                 const data = await res.json();
                 if (data.found) {
-                    resultDiv.textContent = `📖 ${key}=${data.value}`;
+                    resultDiv.textContent = `${key}=${data.value}`;
                 } else {
-                    resultDiv.textContent = `🔍 Key not found`;
+                    resultDiv.textContent = `Key not found`;
                 }
             } catch (e) {
-                resultDiv.textContent = `❌ Error: ${e.message}`;
+                resultDiv.textContent = `Error: ${e.message}`;
             }
         });
 
         document.getElementById('btn-kv-delete').addEventListener('click', async () => {
             const key = document.getElementById('kv-key').value.trim();
-            if (!key) { document.getElementById('kv-result').textContent = '⚠️ Key required'; return; }
-            
+            if (!key) { document.getElementById('kv-result').textContent = 'Key required'; return; }
+
             const resultDiv = document.getElementById('kv-result');
-            resultDiv.textContent = '⏳ Deleting...';
+            resultDiv.textContent = 'Deleting...';
             
             try {
                 const clusterRes = await fetch('/api/cluster');
                 const cluster = await clusterRes.json();
                 const leader = cluster.nodes.find(n => n.state === 'Leader');
-                if (!leader) { resultDiv.textContent = '⚠️ No leader found'; return; }
-                
+                if (!leader) { resultDiv.textContent = 'No leader found'; return; }
+
                 const leaderAddr = leader.config.grpc_addr;
                 const res = await fetch(`/api/kv/delete?key=${encodeURIComponent(key)}&addr=${encodeURIComponent(leaderAddr)}`, { method: 'POST' });
                 const data = await res.json();
-                resultDiv.textContent = data.success ? `🗑️ Deleted ${key}` : `❌ ${data.error || 'Failed'}`;
+                resultDiv.textContent = data.success ? `Deleted ${key}` : `${data.error || 'Failed'}`;
                 appendEvent({ time: ts(), level: data.success ? 'success' : 'error', message: `KV DELETE ${key}: ${data.success ? 'OK' : 'FAILED'}` });
             } catch (e) {
-                resultDiv.textContent = `❌ Error: ${e.message}`;
+                resultDiv.textContent = `Error: ${e.message}`;
             }
         });
 

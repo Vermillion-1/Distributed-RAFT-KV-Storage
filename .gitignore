@@ -6,6 +6,11 @@ kv-chaos
 kv-dashboard
 /agent
 /node-agent
+bin/kv-store
+bin/kv-client
+bin/kv-chaos
+bin/kv-dashboard
+bin/node-agent
 
 # ─── Go Build Artifacts ──────────────────────────────────────────
 /tmp/go-cache/
@@ -65,3 +70,6 @@ project_architecture_and_complexity.md
 
 # ─── Local Archive Folder ────────────────────────────────────────
 not_needed_in_main/
+
+# ─── Submission Documents ────────────────────────────────────────
+submission_docs/

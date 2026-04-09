@@ -10,7 +10,7 @@ This document covers how to provision, deploy, and interact with the Raft KV clu
 - **Go 1.21+** — to build binaries
 
 **For GCP deployment (`dynamic_deploy.sh`):**
-- **Go 1.21+** — for cross-compiling binaries
+- **Go 1.21+** — for cross-compiling binaries (the deploy script handles this automatically)
 - **gcloud CLI** — authenticated and pointing at your project:
    ```bash
    gcloud auth login
@@ -20,37 +20,29 @@ This document covers how to provision, deploy, and interact with the Raft KV clu
 
 ---
 
-## Option A: Local 3-Node Cluster (no cloud account needed)
+## Building Binaries
 
-Starts a 3-node cluster entirely on `localhost`. No GCP account, no VMs, no billing. Best for quick development and testing.
+> **For GCP deployment: you do not need to build manually.** `dynamic_deploy.sh` cross-compiles all binaries for `linux/amd64` and uploads them automatically as part of deployment.
 
-```bash
-bash local_deploy.sh
-```
-
-The script builds `kv-store` and `kv-client`, starts 3 nodes on `localhost` ports 50051–50053 (Raft on 12000–12002), and waits. Press `Ctrl+C` to shut everything down cleanly.
-
-Interact with the cluster in a separate terminal:
+**To interact with a running GCP cluster from your local machine** (macOS/Linux), build `kv-client` for your local OS:
 
 ```bash
-# Set a key (client auto-redirects to leader if needed)
-./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=set -key=hello -val=world
-
-# Get a key
-./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=get -key=hello
-
-# Get via follower read-index (v1.3, linearizable off-leader)
-./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=get -key=hello -follower-read
-
-# Check node health (shows leader, term, applied index)
-./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=health
+go build -o kv-client ./cmd/client/
 ```
 
-Logs are written to `/tmp/raft-kv/node{0,1,2}.log` if you need to debug.
+**To run the local cluster or dashboard locally**, build everything:
+
+```bash
+go build -o kv-store .
+go build -o kv-client ./cmd/client/
+go build -o kv-dashboard ./cmd/dashboard/
+```
+
+Or simply run `bash local_deploy.sh` — it builds and starts everything automatically.
 
 ---
 
-## Option B: GCP Deployment (Full)
+## GCP Deployment (Full)
 
 ### Step 1: Deploy
 
@@ -112,7 +104,7 @@ bash ~/GCP_verify_phase6.sh    # Kernel chaos (iptables bidirectional partition)
 bash ~/GCP_verify_phase7.sh    # Follower reads (Read-Index, v1.3)
 ```
 
-Each script prints PASS/FAIL per test with diagnostic output. Expected result: **37/37**.
+Each script prints PASS/FAIL per test with diagnostic output. Expected result: **43/43** (37 phases 1–6 + 6 phase 7).
 
 ### Step 5: Teardown (Important — stops GCP billing)
 
@@ -136,3 +128,33 @@ This deletes all provisioned VMs for the configured cluster size. If you provisi
 | `-client-id` | auto UUID | Explicit client ID for idempotency testing |
 | `-seq-num` | auto | Explicit sequence number for idempotency testing (minimum: 1) |
 | `-addr` | — | Single address (deprecated — use `-addrs`) |
+
+## Optional: Local 3-Node Cluster (no cloud account needed)
+
+Starts a 3-node cluster entirely on `localhost`. No GCP account, no VMs, no billing. Best for quick development and testing.
+
+```bash
+bash local_deploy.sh
+```
+
+The script builds `kv-store` and `kv-client`, starts 3 nodes on `localhost` ports 50051–50053 (Raft on 12000–12002), and waits. Press `Ctrl+C` to shut everything down cleanly.
+
+Interact with the cluster in a separate terminal:
+
+```bash
+# Set a key (client auto-redirects to leader if needed)
+./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=set -key=hello -val=world
+
+# Get a key
+./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=get -key=hello
+
+# Get via follower read-index (v1.3, linearizable off-leader)
+./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=get -key=hello -follower-read
+
+# Check node health (shows leader, term, applied index)
+./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=health
+```
+
+Logs are written to `/tmp/raft-kv/node{0,1,2}.log` if you need to debug.
+
+---

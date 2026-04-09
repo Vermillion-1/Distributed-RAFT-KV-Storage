@@ -12,18 +12,18 @@ AVAILABLE_ZONES=("us-central1-a" "us-central1-c")
 NODES=()
 ZONES=()
 for i in $(seq 0 $((NODE_COUNT - 1))); do
-  NODES+=("node${i}")
-  ZONES+=("${AVAILABLE_ZONES[$((i % ${#AVAILABLE_ZONES[@]}))]}")
+ NODES+=("node${i}")
+ ZONES+=("${AVAILABLE_ZONES[$((i % ${#AVAILABLE_ZONES[@]}))]}")
 done
 
 gcloud config set project "$PROJECT"
 
-echo "🗑  Deleting VMs..."
+echo " Deleting VMs..."
 for i in $(seq 0 $((NODE_COUNT - 1))); do
-  gcloud compute instances delete "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet
+ gcloud compute instances delete "${NODES[$i]}" --zone="${ZONES[$i]}" --quiet
 done
 
-echo "🔥 Deleting firewall rule..."
+echo " Deleting firewall rule..."
 gcloud compute firewall-rules delete "$FIREWALL_RULE" --quiet
 
 echo "✅ Cluster torn down."

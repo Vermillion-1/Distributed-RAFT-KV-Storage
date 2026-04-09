@@ -14,12 +14,12 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
 CYAN='\033[0;36m'; BOLD='\033[1m'; RESET='\033[0m'
 
 header() { echo -e "\n${CYAN}${BOLD}=== $1 ===${RESET}"; }
-pass()   { echo -e "  ${GREEN}PASS${RESET} -- $1"; ((PASS++)); }
-fail()   { echo -e "  ${RED}FAIL${RESET} -- $1"; ((FAIL++)); }
-info()   { echo -e "  ${YELLOW}info${RESET} $1"; }
+pass() { echo -e " ${GREEN}PASS${RESET} -- $1"; ((PASS++)); }
+fail() { echo -e " ${RED}FAIL${RESET} -- $1"; ((FAIL++)); }
+info() { echo -e " ${YELLOW}info${RESET} $1"; }
 
-cluster()      { curl -sf "${API}/cluster" 2>/dev/null; }
-leader()       { cluster | python3 -c "import sys,json; d=json.load(sys.stdin); ns=[n for n in d['nodes'] if n.get('alive') and n.get('state')=='Leader']; print(ns[0]['config']['id'] if ns else '')" 2>/dev/null; }
+cluster() { curl -sf "${API}/cluster" 2>/dev/null; }
+leader() { cluster | python3 -c "import sys,json; d=json.load(sys.stdin); ns=[n for n in d['nodes'] if n.get('alive') and n.get('state')=='Leader']; print(ns[0]['config']['id'] if ns else '')" 2>/dev/null; }
 node_applied() { local id=$1; cluster | python3 -c "import sys,json; d=json.load(sys.stdin); ns=[n for n in d['nodes'] if n['config']['id']=='${id}']; print(ns[0].get('applied_index',0) if ns else 0)" 2>/dev/null; }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -27,8 +27,8 @@ KV_CLIENT="${SCRIPT_DIR}/kv-client"
 
 # Extract the full grpc_addr to route correctly in GCP
 grpc_addr() {
-  local id=$1
-  cluster | python3 -c "
+ local id=$1
+ cluster | python3 -c "
 import sys,json; d=json.load(sys.stdin)
 ns=[n for n in d['nodes'] if n['config']['id']=='${id}']
 print(ns[0]['config']['grpc_addr'] if ns else '')
@@ -36,11 +36,11 @@ print(ns[0]['config']['grpc_addr'] if ns else '')
 }
 
 wait_leader() {
-  local timeout=$1 t=0
-  while [ $t -lt $timeout ]; do
-    local l; l=$(leader); [ -n "$l" ] && echo "$l" && return 0
-    sleep 1; ((t++))
-  done; echo ""
+ local timeout=$1 t=0
+ while [ $t -lt $timeout ]; do
+ local l; l=$(leader); [ -n "$l" ] && echo "$l" && return 0
+ sleep 1; ((t++))
+ done; echo ""
 }
 
 # ── Pre-flight ────────────────────────────────────────────────────
@@ -71,28 +71,28 @@ info "Sending SET to follower ${FOLLOWER} at ${F_ADDR}..."
 
 # The client should follow redirect and succeed
 OUTPUT=$("${KV_CLIENT}" -addr "${F_ADDR}" -cmd set -key "i1_test" -val "redirect_test" 2>&1)
-echo "  Client output: $OUTPUT"
+echo " Client output: $OUTPUT"
 
 # Verify the write succeeded (client should have followed redirect)
 if echo "$OUTPUT" | grep -qi "successful\|Set.*test"; then
-  pass "I1a: Client successfully wrote via follower redirect"
+ pass "I1a: Client successfully wrote via follower redirect"
 else
-  # Check if it was a redirect message (which is also valid behavior)
-  if echo "$OUTPUT" | grep -qi "not leader\|redirect\|try.*leader"; then
-    info "I1a: Client received redirect (no auto-retry implemented yet)"
-    pass "I1a: Follower returned leader address for redirect"
-  else
-    fail "I1a: Client failed to write via follower: $OUTPUT"
-  fi
+ # Check if it was a redirect message (which is also valid behavior)
+ if echo "$OUTPUT" | grep -qi "not leader\|redirect\|try.*leader"; then
+ info "I1a: Client received redirect (no auto-retry implemented yet)"
+ pass "I1a: Follower returned leader address for redirect"
+ else
+ fail "I1a: Client failed to write via follower: $OUTPUT"
+ fi
 fi
 
 # Verify the key exists in the cluster via the leader
 L_ADDR=$(grpc_addr "$CUR_L")
 GET_RESULT=$("${KV_CLIENT}" -addr "${L_ADDR}" -cmd get -key "i1_test" 2>&1)
 if echo "$GET_RESULT" | grep -q "redirect_test"; then
-  pass "I1b: Key readable from leader after follower redirect"
+ pass "I1b: Key readable from leader after follower redirect"
 else
-  fail "I1b: Key not found in cluster after redirect write"
+ fail "I1b: Key not found in cluster after redirect write"
 fi
 
 
@@ -142,20 +142,20 @@ info "Current value: $GET_DUP"
 # not necessarily by dropping the log entry, but by skipping the state mutation.
 info "I2a: Applied index delta after duplicate write: ${DELTA} (Raft logs entry; FSM skips mutation)"
 if [ "$DELTA" -le 1 ] 2>/dev/null; then
-  pass "I2a: Applied index advanced by ≤1 — normal FSM deduplication behaviour ✓"
+ pass "I2a: Applied index advanced by ≤1 — normal FSM deduplication behaviour ✓"
 else
-  info "I2a: Applied index advanced by ${DELTA} — unexpected (possible duplicate tracking issue)"
+ info "I2a: Applied index advanced by ${DELTA} — unexpected (possible duplicate tracking issue)"
 fi
 
 # I2b: The definitive idempotency test — the VALUE must stay "first_value".
 # If "second_value" appears, the FSM applied the duplicate write (BUG).
 # This is the correct invariant: same (client_id, seq_num) must never mutate state twice.
 if echo "$GET_DUP" | grep -q "first_value"; then
-  pass "I2b: Value preserved as 'first_value' — FSM correctly ignored duplicate payload ✓"
+ pass "I2b: Value preserved as 'first_value' — FSM correctly ignored duplicate payload ✓"
 elif echo "$GET_DUP" | grep -q "second_value"; then
-  fail "I2b: Value mutated to 'second_value' by duplicate write — FSM deduplication FAILED"
+ fail "I2b: Value mutated to 'second_value' by duplicate write — FSM deduplication FAILED"
 else
-  fail "I2b: Unexpected GET result: ${GET_DUP}"
+ fail "I2b: Unexpected GET result: ${GET_DUP}"
 fi
 
 
@@ -198,16 +198,16 @@ GET_AFTER=$("${KV_CLIENT}" -addr "${L_ADDR}" -cmd get -key "i3_key" 2>&1)
 info "Get after delete: $GET_AFTER"
 
 if echo "$GET_AFTER" | grep -qi "not found"; then
-  pass "I3a: Key successfully deleted (first delete worked)"
+ pass "I3a: Key successfully deleted (first delete worked)"
 else
-  fail "I3a: Key still exists after delete"
+ fail "I3a: Key still exists after delete"
 fi
 
 if [ "$DELTA_DEL" -eq 0 ]; then
-  pass "I3b: Duplicate delete not applied (idempotent)"
+ pass "I3b: Duplicate delete not applied (idempotent)"
 else
-  info "I3b: Duplicate delete applied (delta: ${DELTA_DEL})"
-  pass "I3: Delete idempotent (either skipped or handled gracefully)"
+ info "I3b: Duplicate delete applied (delta: ${DELTA_DEL})"
+ pass "I3: Delete idempotent (either skipped or handled gracefully)"
 fi
 
 
@@ -240,35 +240,35 @@ NEW_L=$(wait_leader 15)
 info "New leader: ${NEW_L}"
 
 if [ -z "$NEW_L" ]; then
-  fail "I4: No new leader elected after killing leader"
+ fail "I4: No new leader elected after killing leader"
 else
-  info "New leader: ${NEW_L}"
+ info "New leader: ${NEW_L}"
 
-  # I4a: Test the smart client's ACTUAL failover path — pass ALL addresses and let
-  # the client discover the new leader via the Retry + Leader-Redirect resiliency
-  # pattern (lecture slide 9: Retry pattern + Health Endpoint Monitoring).
-  # The client must NOT require the caller to pre-discover the new leader.
-  # This is what makes it a "smart client": it uses the leader redirect in the
-  # gRPC response to find the real leader automatically.
-  info "Writing with -addrs (all ${TOTAL} endpoints) — client must auto-discover new leader..."
-  WRITE_OUT=$("${KV_CLIENT}" -addrs "${ALL_ADDRS}" \
-    -cmd set -key "i4_after" -val "post_kill" 2>&1)
-  info "Smart client write output: ${WRITE_OUT}"
+ # I4a: Test the smart client's ACTUAL failover path — pass ALL addresses and let
+ # the client discover the new leader via the Retry + Leader-Redirect resiliency
+ # pattern (lecture slide 9: Retry pattern + Health Endpoint Monitoring).
+ # The client must NOT require the caller to pre-discover the new leader.
+ # This is what makes it a "smart client": it uses the leader redirect in the
+ # gRPC response to find the real leader automatically.
+ info "Writing with -addrs (all ${TOTAL} endpoints) — client must auto-discover new leader..."
+ WRITE_OUT=$("${KV_CLIENT}" -addrs "${ALL_ADDRS}" \
+ -cmd set -key "i4_after" -val "post_kill" 2>&1)
+ info "Smart client write output: ${WRITE_OUT}"
 
-  if echo "$WRITE_OUT" | grep -qi "successful"; then
-    pass "I4a: Smart client (-addrs) self-healed after leader death (Retry + Redirect ✓)"
-  else
-    fail "I4a: Smart client failed to write after leader death: ${WRITE_OUT}"
-  fi
+ if echo "$WRITE_OUT" | grep -qi "successful"; then
+ pass "I4a: Smart client (-addrs) self-healed after leader death (Retry + Redirect ✓)"
+ else
+ fail "I4a: Smart client failed to write after leader death: ${WRITE_OUT}"
+ fi
 
-  # I4b: Read back via the new leader directly for ground-truth verification
-  NEW_L_ADDR=$(grpc_addr "$NEW_L")
-  READ_OUT=$("${KV_CLIENT}" -addr "${NEW_L_ADDR}" -cmd get -key "i4_after" 2>&1)
-  if echo "$READ_OUT" | grep -q "post_kill"; then
-    pass "I4b: Key readable from new leader — data committed through failover ✓"
-  else
-    fail "I4b: Key not readable after failover write"
-  fi
+ # I4b: Read back via the new leader directly for ground-truth verification
+ NEW_L_ADDR=$(grpc_addr "$NEW_L")
+ READ_OUT=$("${KV_CLIENT}" -addr "${NEW_L_ADDR}" -cmd get -key "i4_after" 2>&1)
+ if echo "$READ_OUT" | grep -q "post_kill"; then
+ pass "I4b: Key readable from new leader — data committed through failover ✓"
+ else
+ fail "I4b: Key not readable after failover write"
+ fi
 fi
 
 # Restart killed node for cleanup
@@ -282,6 +282,6 @@ sleep 5
 echo ""
 header "PHASE 5 RESULTS (Idempotency & Client Features)"
 TOTAL_TESTS=$((PASS + FAIL))
-echo -e "  ${GREEN}PASS: ${PASS}/${TOTAL_TESTS}${RESET}  |  ${RED}FAIL: ${FAIL}/${TOTAL_TESTS}${RESET}"
-[ $FAIL -eq 0 ] && echo -e "  ${GREEN}${BOLD}All idempotency & client feature tests passed.${RESET}"
+echo -e " ${GREEN}PASS: ${PASS}/${TOTAL_TESTS}${RESET} | ${RED}FAIL: ${FAIL}/${TOTAL_TESTS}${RESET}"
+[ $FAIL -eq 0 ] && echo -e " ${GREEN}${BOLD}All idempotency & client feature tests passed.${RESET}"
 echo ""
