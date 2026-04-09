@@ -1,6 +1,6 @@
-# ✅ Consistency Guarantees
+#  Consistency Guarantees
 
-This system is a **CP** system in the CAP theorem — it chooses **Consistency** over Availability when a network partition reduces available nodes below quorum.
+This system is a **CP** system in the CAP theorem that chooses **Consistency** over Availability when a network partition reduces available nodes below quorum.
 
 ---
 
@@ -29,8 +29,8 @@ After a leader failure, the cluster elects a new leader in approximately **1 sec
 When fewer than `⌊N/2⌋ + 1` nodes are alive, **no node can become leader**. The cluster stops accepting writes rather than risk inconsistency.
 
 ```
-3-node cluster: kill 2 nodes → 0 leaders. ✅
-11-node cluster: kill 6 nodes → 0 leaders. ✅
+3-node cluster: kill 2 nodes → 0 leaders. 
+11-node cluster: kill 6 nodes → 0 leaders. 
 ```
 
 This was verified exactly at the quorum boundary in cascading failure tests — the cluster continued operating through kills 1 through (f), then entered safety mode at kill (f+1).
