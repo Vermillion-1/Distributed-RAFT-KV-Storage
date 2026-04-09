@@ -87,7 +87,7 @@
 
 ### Closing this slide
 
-> "All six features are proven by specific test IDs in our 6-phase suite — those are the codes in the bottom-right of each card. 37 tests, all passing, on GCP, April 4."
+> "All six features are proven by specific test IDs in our verification suite — those are the codes in the bottom-right of each card. 43 tests total: 37 on GCP across phases 1–6, plus 6 Phase 7 follower read tests. All passing, April 4."
 
 ### Anticipated questions
 - **Q: What's the overhead of VerifyLeader?** A: One round-trip per read, ~30ms cross-zone on GCP. For read-heavy workloads, follower reads eliminate this overhead.
@@ -128,9 +128,9 @@ A 5-column table: Result Category | Key Metric | Fault Method | Test Evidence | 
 
 ### Closing
 
-> "37 tests. Every test is a real fault on real GCP VMs. No mocks, no simulations. The system either behaves correctly or it doesn't. It does."
+> "43 tests. Every test is a real fault on real GCP VMs — or a real local cluster for Phase 7. No mocks, no simulations. The system either behaves correctly or it doesn't. It does."
 
 ### Anticipated questions
 - **Q: How long did the full test suite take to run?** A: Each phase is 5–15 minutes of wall time including provisioning. Full suite is about an hour end-to-end.
-- **Q: Did any tests fail during development?** A: Yes — we went from 33/37 to 36/37 to 37/37 across three bug fixes. The bugs were in the test infrastructure itself (unidirectional iptables, wrong NIC for netem, follower selector picking the test node), not just the system.
+- **Q: Did any tests fail during development?** A: Yes — we went from 33/36 to 36/37 to 37/37 across three bug fixes. The bugs were in the test infrastructure itself (unidirectional iptables, wrong NIC for netem, follower selector picking the test node), not just the system.
 - **Q: Why test both N=3 and N=5?** A: To demonstrate that the quorum math generalizes. At N=3, majority = 2. At N=5, majority = 3. The same code handles both — you just change the cluster size parameter.
