@@ -1,4 +1,4 @@
-# 📁 Code Overview
+# Code Overview
 
 This document is broken into sub-files for readability. Each covers one key file in depth.
 
