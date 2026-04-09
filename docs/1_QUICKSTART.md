@@ -1,4 +1,4 @@
-# 🚀 Quickstart — Clone & Run
+#  Quickstart — Clone & Run
 
 > **Prerequisites:** Go 1.21+, `git`, `curl`, `python3`, `jq` (optional but helpful for manual inspection)
 
