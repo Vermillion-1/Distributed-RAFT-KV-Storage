@@ -7,7 +7,7 @@ import os
 # Baseline: 3-node cluster, us-central1 cross-zone (~15ms RTT), e2-micro VMs
 # ---------------------------------------------------------------------------
 
-out_dir = "/Users/ankushsingh/Desktop/CMPT 756/Distributed-RAFT-KV-Storage-prototype/analysis/graphs"
+out_dir = os.path.join(os.path.dirname(__file__), "graphs")
 os.makedirs(out_dir, exist_ok=True)
 
 # Global style
