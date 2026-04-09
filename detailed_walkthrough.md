@@ -190,7 +190,7 @@ kv-store (follower)
 
 **Why this is linearizable:** The follower's `appliedIndex ≥ N` guarantee means it has applied every log entry up to the leader's current commit point. Any write that completed before the read (from the client's perspective) has a Raft log index ≤ N, so the follower has necessarily applied it.
 
-**Tested by:** `verify_follower_read.sh` — 6 scenarios covering fresh writes, writes under partition, and cross-follower consistency. All 6/6 pass.
+**Tested by:** `GCP_verify_phase7.sh` — 6 scenarios covering fresh writes, writes under partition, and cross-follower consistency. All 6/6 pass.
 
 ---
 

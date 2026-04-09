@@ -37,7 +37,7 @@ Each VM runs exactly two processes. The sidecar agent operates at the OS level (
 
 | Feature | Description | Evidence |
 |---------|-------------|----------|
-| **Follower Reads (v1.3)** | Read-Index protocol: follower asks leader for `commit_index` N, waits until `appliedIndex ≥ N`, serves read locally. Linearizable reads without routing every GET to leader. | `verify_follower_read.sh` 6/6 |
+| **Follower Reads (v1.3)** | Read-Index protocol: follower asks leader for `commit_index` N, waits until `appliedIndex ≥ N`, serves read locally. Linearizable reads without routing every GET to leader. | `GCP_verify_phase7.sh` 6/6 |
 | **Exactly-Once Writes** | Per-client `(client_id, seq_num)` dedup table in FSM. Retried write after leader change is silently dropped — value never applied twice. | P5 I2/I3 PASS |
 | **Linearizable Reads (Leader)** | `VerifyLeader()` heartbeat before every GET. Deposed leader cannot serve stale data. Minority partition → reads blocked (CP enforced). | P2c, L3b, N6c PASS |
 | **Deployment Engine** | Provisions N GCP VMs, cross-compiles `linux/amd64` on macOS, SSH retry loop, bootstraps full N-node quorum in < 2 minutes. | 37/37 GCP confirmed |
@@ -48,7 +48,7 @@ Each VM runs exactly two processes. The sidecar agent operates at the OS level (
 
 ## Test Results
 
-**Score: 37/37** across a 6-phase fault injection suite on GCP (3-node and 5-node).
+**37/37** on GCP 6-phase suite · **+6/6** Phase 7 (follower reads) · **43 tests total**
 
 | Phase | Focus | Tests |
 |-------|-------|-------|
@@ -58,6 +58,7 @@ Each VM runs exactly two processes. The sidecar agent operates at the OS level (
 | P4 — Durability | Cluster wipe, dirty crash, snapshot catch-up | D1, D2, D3 |
 | P5 — Idempotency | Exactly-once semantics across failover | I2, I3 |
 | P6 — Kernel Chaos | iptables bidirectional partition, 6 assertions | N6a–N6f |
+| P7 — Follower Reads | Read-Index linearizability off-leader (v1.3) | T1–T6 |
 
 Key performance numbers:
 
@@ -78,9 +79,10 @@ Key performance numbers:
 ```bash
 # Requires Go 1.21+
 go build ./...
-./start_cluster.sh
-./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 set foo bar
-./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 get foo
+bash local_deploy.sh
+# In a separate terminal:
+./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=set -key=foo -val=bar
+./kv-client -addrs=localhost:50051,localhost:50052,localhost:50053 -cmd=get -key=foo
 ```
 
 ### GCP deployment (full)
@@ -116,9 +118,9 @@ bash GCP_verify_phase6.sh
 │   ├── agent/                 # node-agent sidecar (fault injection HTTP API)
 │   └── dashboard/             # kv-dashboard web UI
 ├── proto/kv.proto             # gRPC service definitions
-├── GCP_verify_phase[1-6].sh   # Automated test phases
+├── GCP_verify_phase[1-7].sh   # Automated test phases (43 tests total)
 ├── dynamic_deploy.sh          # GCP cluster provisioning
-├── start_cluster.sh           # Local cluster launcher
+├── local_deploy.sh            # Local 3-node cluster launcher
 ├── submission_docs/
 │   ├── REPORT.md              # Full technical report (955 lines)
 │   └── 756 PPT v2-proto.pptx  # Presentation slides

@@ -404,7 +404,7 @@ Five unit tests in `server/fsm_test.go` cover the read-index path:
 | `TestWaitForIndexCatchUp` | Goroutine blocked in `WaitForIndex` unblocks once `Apply()` reaches the index |
 | `TestSnapshotRestoreAppliedIdx` | `appliedIndex` is persisted in snapshot and restored correctly |
 
-End-to-end behavior was verified by `verify_follower_read.sh` (6/6 PASS):
+End-to-end behavior was verified by `GCP_verify_phase7.sh` (6/6 PASS):
 - T2: node1 follower read returns correct value written via leader
 - T3: node2 follower read returns correct value
 - T4: Missing key returns "not found" (not redirect) from follower
