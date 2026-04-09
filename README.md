@@ -55,7 +55,7 @@ open http://localhost:8080
 
 ---
 
-## 🏆 Proven Guarantees
+##  Proven Guarantees
 
 | Guarantee | Measured Result |
 |---|---|
@@ -80,7 +80,7 @@ open http://localhost:8080
 
 ---
 
-## 🛠️ Project Structure
+##  Project Structure
 
 ```text
 store/
