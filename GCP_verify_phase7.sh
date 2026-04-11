@@ -1,135 +1,91 @@
 #!/bin/bash
 # GCP_verify_phase7.sh — Phase 7: Read-Index Follower Reads (FEAT-RI, v1.3)
-#
-# Starts a 3-node local cluster, writes a key via the leader, then confirms that
-# followers with --follower-read serve the correct value without redirecting.
-# Also verifies a missing-key read from a follower returns "not found" (not a redirect).
-#
-# Usage: bash verify_follower_read.sh
-# Requires: kv-store and kv-client binaries built in project root.
+# Adapted for GCP: Queries the live Phase 1-6 cluster instead of a local loopback cluster.
 
 set -euo pipefail
 
 PASS=0
 FAIL=0
 
-pass() { echo "[PASS] $1"; PASS=$((PASS+1)); }
-fail() { echo "[FAIL] $1"; FAIL=$((FAIL+1)); }
+pass() { echo -e "  ✅ [PASS] $1"; PASS=$((PASS+1)); }
+fail() { echo -e "  ❌ [FAIL] $1"; FAIL=$((FAIL+1)); }
 
-# ---- Cleanup & Build ----
-echo "=== Building binaries ==="
-killall kv-store 2>/dev/null || true
-lsof -ti:50051,50052,50053,12000,12001,12002 2>/dev/null | xargs kill -9 2>/dev/null || true
-rm -rf /tmp/raft-kv-fri/
-mkdir -p /tmp/raft-kv-fri/
+API="http://localhost:8080/api"
+KV_CLIENT="${HOME}/kv-client"
 
-go build -o kv-store . 2>&1
-go build -o kv-client ./cmd/client/ 2>&1
-echo "Build complete."
+echo "=== Gathering Cluster Network Info ==="
+if ! curl -sf "${API}/cluster" > /dev/null 2>&1; then
+    echo "ERROR: Dashboard API unreachable. Is the node agent running?"
+    exit 1
+fi
 
-# ---- Start Cluster ----
+# Map out the Addresses
+ALL_ADDRS=$(curl -s "${API}/cluster" | python3 -c "import sys,json; print(','.join([n['config']['grpc_addr'] for n in json.load(sys.stdin)['nodes'] if n.get('alive')]))")
+LEADER_ADDR=$(curl -s "${API}/cluster" | python3 -c "import sys,json; l=[n['config']['grpc_addr'] for n in json.load(sys.stdin)['nodes'] if n.get('state')=='Leader']; print(l[0] if l else '')")
+FOLLOWER_ADDR=$(curl -s "${API}/cluster" | python3 -c "import sys,json; f=[n['config']['grpc_addr'] for n in json.load(sys.stdin)['nodes'] if n.get('state')=='Follower']; print(f[0] if f else '')")
+
+if [ -z "$LEADER_ADDR" ] || [ -z "$FOLLOWER_ADDR" ]; then
+    echo "ERROR: Could not find both a Leader and a Follower in the live cluster."
+    exit 1
+fi
+
+echo "All Nodes: $ALL_ADDRS"
+echo "Leader:    $LEADER_ADDR"
+echo "Follower:  $FOLLOWER_ADDR"
+
+
+# ---- Test 1: Set key via smart client (all addrs) ----
 echo ""
-echo "=== Starting 3-node cluster ==="
-
-./kv-store -id=node0 -raft=127.0.0.1:12000 -grpc=127.0.0.1:50051 -data=/tmp/raft-kv-fri/node0 \
-    > /tmp/raft-kv-fri/node0.log 2>&1 &
-sleep 2
-
-./kv-store -id=node1 -raft=127.0.0.1:12001 -grpc=127.0.0.1:50052 -data=/tmp/raft-kv-fri/node1 \
-    -join=127.0.0.1:50051 > /tmp/raft-kv-fri/node1.log 2>&1 &
-sleep 1
-
-./kv-store -id=node2 -raft=127.0.0.1:12002 -grpc=127.0.0.1:50053 -data=/tmp/raft-kv-fri/node2 \
-    -join=127.0.0.1:50051 > /tmp/raft-kv-fri/node2.log 2>&1 &
-sleep 2
-
-echo "Cluster started."
-
-# ---- Helper: wait for leader ----
-wait_for_leader() {
-    local max_attempts=20
-    for i in $(seq 1 $max_attempts); do
-        if ./kv-client -cmd=health -addrs=127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 2>/dev/null | grep -q "Leader"; then
-            return 0
-        fi
-        sleep 0.5
-    done
-    echo "ERROR: No leader elected after ${max_attempts} attempts"
-    return 1
-}
-
-echo "Waiting for leader election..."
-wait_for_leader
-echo "Leader elected."
-
-# ---- Test 1: Set key via leader path ----
-echo ""
-echo "=== Test 1: Set key via leader ==="
-if ./kv-client -cmd=set -key=testkey -val=hello123 -addrs=127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 2>/dev/null | grep -q "successful"; then
-    pass "T1: Set testkey=hello123 via leader"
+echo "=== Test 1: Set key via Leader ==="
+if $KV_CLIENT -cmd=set -key=testkey -val=hello123 -addrs="$ALL_ADDRS" 2>/dev/null | grep -q "successful"; then
+    pass "T1: Set testkey=hello123 via cluster"
 else
     fail "T1: Set failed"
 fi
 
-# Small pause for replication to followers
-sleep 0.5
+sleep 0.5 # Small replication pause
 
-# ---- Test 2: Follower read from node1 ----
+# ---- Test 2: Follower read from specific follower node ----
 echo ""
-echo "=== Test 2: Follower read from node1 (50052) ==="
-OUT=$(./kv-client -cmd=get -key=testkey -addr=127.0.0.1:50052 -follower-read 2>/dev/null || true)
+echo "=== Test 2: Follower read from $FOLLOWER_ADDR ==="
+OUT=$($KV_CLIENT -cmd=get -key=testkey -addr="$FOLLOWER_ADDR" -follower-read 2>/dev/null || true)
 if echo "$OUT" | grep -q "hello123"; then
-    pass "T2: node1 follower read returned correct value (hello123)"
+    pass "T2: Follower read returned correct value (hello123)"
 else
-    fail "T2: node1 follower read did not return hello123. Got: $OUT"
+    fail "T2: Follower read did not return hello123. Got: $OUT"
 fi
 
-# ---- Test 3: Follower read from node2 ----
+# ---- Test 3: Follower read of missing key returns not-found ----
 echo ""
-echo "=== Test 3: Follower read from node2 (50053) ==="
-OUT=$(./kv-client -cmd=get -key=testkey -addr=127.0.0.1:50053 -follower-read 2>/dev/null || true)
-if echo "$OUT" | grep -q "hello123"; then
-    pass "T3: node2 follower read returned correct value (hello123)"
-else
-    fail "T3: node2 follower read did not return hello123. Got: $OUT"
-fi
-
-# ---- Test 4: Follower read of missing key returns not-found (not redirect) ----
-echo ""
-echo "=== Test 4: Missing key via follower read ==="
-OUT=$(./kv-client -cmd=get -key=doesnotexist -addr=127.0.0.1:50052 -follower-read 2>/dev/null || true)
+echo "=== Test 3: Missing key via follower read ==="
+OUT=$($KV_CLIENT -cmd=get -key=doesnotexist -addr="$FOLLOWER_ADDR" -follower-read 2>/dev/null || true)
 if echo "$OUT" | grep -q "not found"; then
-    pass "T4: Missing key correctly returned 'not found' from follower"
+    pass "T3: Missing key correctly returned 'not found' from follower"
 else
-    fail "T4: Expected 'not found', got: $OUT"
+    fail "T3: Expected 'not found', got: $OUT"
 fi
 
-# ---- Test 5: Normal (non-follower-read) Get still works via leader redirect ----
+# ---- Test 4: Multiple writes, follower read sees latest ----
+echo ""
+echo "=== Test 4: Follower read reflects latest write ==="
+$KV_CLIENT -cmd=set -key=testkey -val=updated456 -addrs="$ALL_ADDRS" 2>/dev/null | grep -q "successful" || true
+sleep 0.3
+OUT=$($KV_CLIENT -cmd=get -key=testkey -addr="$FOLLOWER_ADDR" -follower-read 2>/dev/null || true)
+if echo "$OUT" | grep -q "updated456"; then
+    pass "T4: Follower read reflects updated value (updated456)"
+else
+    fail "T4: Follower read stale or wrong. Got: $OUT"
+fi
+
+# ---- Test 5: Normal Get (no --follower-read) still works via leader redirect ----
 echo ""
 echo "=== Test 5: Normal Get (no --follower-read) still redirects correctly ==="
-OUT=$(./kv-client -cmd=get -key=testkey -addrs=127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 2>/dev/null || true)
-if echo "$OUT" | grep -q "hello123"; then
+OUT=$($KV_CLIENT -cmd=get -key=testkey -addrs="$ALL_ADDRS" 2>/dev/null || true)
+if echo "$OUT" | grep -q "updated456"; then
     pass "T5: Normal leader-redirect Get still returns correct value"
 else
     fail "T5: Normal Get failed. Got: $OUT"
 fi
-
-# ---- Test 6: Multiple writes, follower read sees latest ----
-echo ""
-echo "=== Test 6: Follower read reflects latest write ==="
-./kv-client -cmd=set -key=testkey -val=updated456 -addrs=127.0.0.1:50051,127.0.0.1:50052,127.0.0.1:50053 2>/dev/null | grep -q "successful" || true
-sleep 0.3
-OUT=$(./kv-client -cmd=get -key=testkey -addr=127.0.0.1:50052 -follower-read 2>/dev/null || true)
-if echo "$OUT" | grep -q "updated456"; then
-    pass "T6: Follower read reflects updated value (updated456)"
-else
-    fail "T6: Follower read stale or wrong. Got: $OUT"
-fi
-
-# ---- Cleanup ----
-echo ""
-echo "=== Shutting down cluster ==="
-killall kv-store 2>/dev/null || true
 
 # ---- Summary ----
 echo ""
@@ -137,9 +93,7 @@ echo "========================================"
 echo "  Follower Read Tests: $PASS passed, $FAIL failed"
 echo "========================================"
 if [ "$FAIL" -eq 0 ]; then
-    echo "  ALL TESTS PASSED"
     exit 0
 else
-    echo "  SOME TESTS FAILED"
     exit 1
 fi
