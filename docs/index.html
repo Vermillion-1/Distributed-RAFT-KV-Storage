@@ -63,8 +63,42 @@
   }
   #themeBtn:hover{color:var(--accent); border-color:var(--accent)}
 
-  /* ---- layout ---- */
-  main{max-width:var(--maxw); margin:0 auto; padding:0 1.25rem 6rem}
+  /* ---- layout: sidebar + content ---- */
+  .shell{
+    display:grid; grid-template-columns:232px minmax(0,1fr);
+    gap:2.5rem; max-width:1200px; margin:0 auto; padding:0 1.5rem;
+  }
+  aside{
+    position:sticky; top:58px; align-self:start; max-height:calc(100vh - 74px);
+    overflow-y:auto; padding:2rem 0 3rem; scrollbar-width:thin;
+  }
+  aside .toc-title{
+    font-size:.7rem; text-transform:uppercase; letter-spacing:.11em;
+    color:var(--fg-faint); font-weight:600; margin:0 0 .8rem;
+  }
+  aside ol{list-style:none; padding:0; margin:0; counter-reset:toc}
+  aside li{margin:0}
+  aside a{
+    display:block; padding:.4rem .7rem .4rem .75rem; font-size:.855rem;
+    color:var(--fg-muted); text-decoration:none; border-left:2px solid var(--line);
+    line-height:1.35; transition:color .12s, border-color .12s;
+  }
+  aside a:hover{color:var(--accent); border-left-color:var(--accent)}
+  aside a.active{
+    color:var(--accent); font-weight:600; border-left-color:var(--accent);
+    background:var(--accent-soft);
+  }
+  aside .toc-foot{
+    margin-top:1.4rem; padding-top:1rem; border-top:1px solid var(--line);
+    font-size:.78rem; line-height:1.5;
+  }
+  aside .toc-foot a{border:none; padding:.15rem 0; font-size:.78rem}
+  aside .toc-foot a:hover{background:none}
+  main{max-width:var(--maxw); margin:0; padding:0 0 6rem; min-width:0}
+  @media(max-width:940px){
+    .shell{grid-template-columns:1fr; gap:0}
+    aside{display:none}
+  }
   section{padding-top:3.2rem}
   h1{font-size:2.35rem; line-height:1.18; letter-spacing:-.022em; margin:0 0 .5rem}
   h2{
@@ -116,6 +150,14 @@
   }
   .diagram .mermaid{display:flex; justify-content:center; min-width:min-content}
   .caption{font-size:.83rem; color:var(--fg-muted); margin-top:.7rem; text-align:center}
+  figure{margin:1.5rem 0; padding:0}
+  figure img{
+    width:100%; height:auto; display:block; border-radius:10px;
+    border:1px solid var(--line); background:#fff;
+  }
+  figure figcaption{
+    font-size:.83rem; color:var(--fg-muted); margin-top:.6rem; text-align:center;
+  }
 
   .pill{
     display:inline-block; font-family:var(--mono); font-size:.72rem; padding:.15rem .5rem;
@@ -142,6 +184,7 @@
   <div class="nav-inner">
     <a href="#top" class="nav-brand">Raft KV</a>
     <a href="#overview">Overview</a>
+    <a href="#scope">What Was Built</a>
     <a href="#architecture">Architecture</a>
     <a href="#consensus">Consensus</a>
     <a href="#paths">Read &amp; Write</a>
@@ -153,15 +196,38 @@
   </div>
 </nav>
 
+<div class="shell">
+
+<aside>
+  <p class="toc-title">Contents</p>
+  <ol>
+    <li><a href="#overview">Overview</a></li>
+    <li><a href="#scope">What Was Built</a></li>
+    <li><a href="#architecture">System Architecture</a></li>
+    <li><a href="#consensus">Consensus Mechanics</a></li>
+    <li><a href="#paths">Read &amp; Write Paths</a></li>
+    <li><a href="#failure">Failure Handling</a></li>
+    <li><a href="#chaos">Chaos Testing</a></li>
+    <li><a href="#results">Empirical Results</a></li>
+    <li><a href="#limits">Limitations</a></li>
+  </ol>
+  <div class="toc-foot">
+    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage">↗ Repository</a>
+    <a href="https://raft.github.io/raft.pdf">↗ Raft paper</a>
+  </div>
+</aside>
+
 <main id="top">
 
 <header class="hero">
   <div class="eyebrow">Distributed Systems · CMPT 756</div>
   <h1>Fault-Tolerant Distributed Key-Value Store</h1>
   <p class="lede">
-    A CP key-value store implementing the Raft consensus algorithm in Go — deployed on Google Cloud
+    A CP key-value store built on the Raft consensus algorithm in Go — deployed on Google Cloud
     Platform and verified under OS-level fault injection. Think of it as a small etcd: the same
-    class of system that backs Kubernetes' control plane, built from the consensus layer up.
+    class of system that backs Kubernetes' control plane. The consensus mathematics come from
+    HashiCorp Raft; everything that turns that library into a deployed, partition-tolerant
+    distributed service was built here — see <a href="#scope">what was built</a>.
   </p>
   <div>
     <span class="pill">Go</span><span class="pill">HashiCorp Raft v1.7.3</span>
@@ -201,11 +267,94 @@
     <thead><tr><th>Component</th><th>Role</th></tr></thead>
     <tbody>
       <tr><td><code>kv-store</code></td><td>Raft replica + gRPC server. One per VM.</td></tr>
-      <tr><td><code>node-agent</code></td><td>Fault-injection sidecar. Operates at OS level, independent of application logic.</td></tr>
+      <tr><td><code>node-agent</code></td><td>Supervisor + fault-injection sidecar. Spawns <code>kv-store</code> as a child process and injects faults at OS level.</td></tr>
       <tr><td><code>kv-client</code></td><td>CLI with automatic leader discovery and redirect-follow.</td></tr>
       <tr><td><code>kv-dashboard</code></td><td>Web UI for driving chaos scenarios and observing cluster health.</td></tr>
+      <tr><td><code>kv-chaos</code></td><td>TCP proxy for injecting delay and packet loss between nodes without stopping any process.</td></tr>
     </tbody>
   </table>
+</section>
+
+
+<section id="scope">
+  <h2>What Was Built</h2>
+  <p>
+    Being precise about the boundary, because it is the first thing worth asking about any project
+    that says "Raft".
+  </p>
+
+  <h3>What the libraries provide</h3>
+  <p>
+    The consensus <em>mathematics</em> were not reimplemented. <a href="https://github.com/hashicorp/raft">HashiCorp
+    Raft</a> supplies leader-election mechanics and randomized timers, quorum arithmetic
+    (<code>⌊N/2⌋+1</code>), inter-node heartbeats, and log truncation.
+    <a href="https://github.com/etcd-io/bbolt">BoltDB</a> supplies the fsync guarantees that let the
+    log survive a sudden <code>SIGKILL</code>.
+  </p>
+
+  <h3>What was engineered on top</h3>
+  <p>
+    Everything that turns a consensus library into a service running across physically separate
+    machines under adversarial network conditions:
+  </p>
+  <table>
+    <thead><tr><th>Component</th><th>Why it is non-trivial</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><strong>Service discovery inside the replicated state machine</strong></td>
+        <td>A follower receiving a client request must redirect it to the leader — but the leader's
+        gRPC address is a dynamic GCP internal IP. Nodes therefore write their own
+        <code>raftAddr → grpcAddr</code> mapping <em>into the Raft FSM itself</em>
+        (<code>fsm.Peers</code>), so the routing table is replicated and consistent by the same
+        mechanism as the data. Any follower can resolve the current leader's client address
+        without external coordination.</td>
+      </tr>
+      <tr>
+        <td><strong>Dynamic deployment engine</strong></td>
+        <td>Provisions N GCP VMs, configures firewall rules, cross-compiles <code>linux/amd64</code>
+        binaries from macOS, distributes them over SCP with an SSH retry loop, and bootstraps a
+        quorum in under two minutes.</td>
+      </tr>
+      <tr>
+        <td><strong>Sidecar process supervision</strong></td>
+        <td>The <code>node-agent</code> spawns <code>kv-store</code> as a <em>child process</em> and
+        exposes an HTTP API, so the dashboard can deliver <code>SIGSTOP</code>/<code>SIGCONT</code>/<code>SIGKILL</code>
+        to a remote process over the network — freezing a node without killing it, which a plain
+        crash test cannot simulate.</td>
+      </tr>
+      <tr>
+        <td><strong>Real network partitions</strong></td>
+        <td>A TCP chaos proxy (<code>kv-chaos</code>) plus an iptables daemon, so partitions and
+        multi-second delays are injected <em>without</em> stopping the Raft process — verifying that
+        election timers and client gRPC connections are genuinely decoupled.</td>
+      </tr>
+      <tr>
+        <td><strong>Exactly-once semantics</strong></td>
+        <td>Per-client <code>(client_id, seq_num)</code> tracking inside the FSM, so a retry after a
+        dropped response cannot apply a write twice.</td>
+      </tr>
+      <tr>
+        <td><strong>Automated verification suite</strong></td>
+        <td>Seven phases of scripted assertions run against a live cluster, parsing health endpoints
+        and latency measurements rather than eyeballing logs.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <p><strong>The honest summary.</strong> Delegating the consensus proof to a battle-tested library
+    freed the engineering effort for the part that is actually hard in practice: getting a
+    theoretical algorithm to survive real machines, real networks, and real failures.</p>
+  </div>
+
+  <h3>Fault model</h3>
+  <p>The system is designed against, and only against, these assumptions:</p>
+  <ul>
+    <li><strong>Crash-recovery</strong> — nodes may die at any moment, lose in-memory state, and rejoin later.</li>
+    <li><strong>Unreliable network</strong> — messages may be dropped, delayed arbitrarily, or reordered.</li>
+    <li><strong>Split-brain partitions</strong> — the network may sever the cluster into isolated groups.</li>
+    <li><strong>Non-Byzantine</strong> — nodes fail by stopping, not by lying. Malicious participants and packet corruption are out of scope.</li>
+  </ul>
 </section>
 
 <section id="architecture">
@@ -303,6 +452,12 @@ sequenceDiagram
     </pre>
     <div class="caption">A candidate needs ⌊N/2⌋+1 votes — 2 of 3, or 3 of 5. Requiring a strict majority is what makes two simultaneous leaders impossible.</div>
   </div>
+
+  <figure>
+    <img src="assets/availability_mttr.png"
+         alt="Availability timeline showing writes blocked for 1.25 s during leader failover, split into a 500 ms heartbeat timeout and a 750 ms election window">
+    <figcaption>Measured failover on GCP. The outage decomposes exactly into the two configured timeouts — 500 ms to detect silence, 750 ms to elect — which is why observed MTTR matches the theoretical minimum.</figcaption>
+  </figure>
 
   <div class="callout">
     <p><strong>Why a majority, specifically?</strong> Any two majorities of the same cluster must
@@ -422,6 +577,12 @@ stateDiagram-v2
     <div class="caption">The minority side of a partition blocks rather than diverging — this is the CP guarantee made concrete.</div>
   </div>
 
+  <figure>
+    <img src="assets/durability_proof.png"
+         alt="Bar chart showing acknowledged writes versus recovered keys across three crash models, all at 100 percent recovery">
+    <figcaption>Durability across three crash models. D2 recovers 7/7 <em>acknowledged</em> writes — unacknowledged writes are correctly absent rather than partially applied.</figcaption>
+  </figure>
+
   <table>
     <thead><tr><th>Failure</th><th>Response</th><th>Verified by</th></tr></thead>
     <tbody>
@@ -492,6 +653,12 @@ stateDiagram-v2
     The clearest empirical result: <strong>where</strong> latency lands matters far more than how much
     there is.
   </p>
+  <figure>
+    <img src="assets/latency_quorum_proof.png"
+         alt="Bar chart of write throughput: baseline 62.9 ops per second, slow follower 61.3, slow leader 0.6">
+    <figcaption>Quorum bypass measured directly: a follower delayed 2000 ms is almost free; a leader delayed 500 ms is catastrophic.</figcaption>
+  </figure>
+
   <table>
     <thead><tr><th>Condition</th><th>Latency</th><th>Throughput</th><th>vs baseline</th></tr></thead>
     <tbody>
@@ -564,6 +731,7 @@ stateDiagram-v2
 </footer>
 
 </main>
+</div>
 
 <script type="module">
 import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
@@ -610,6 +778,23 @@ async function render() {
   }
 }
 render();
+
+// scroll-spy: highlight the section currently in view
+const tocLinks = [...document.querySelectorAll('aside a[href^="#"]')];
+const watched  = tocLinks
+  .map(a => document.querySelector(a.getAttribute('href')))
+  .filter(Boolean);
+if (watched.length) {
+  const spy = new IntersectionObserver(entries => {
+    entries.forEach(en => {
+      if (!en.isIntersecting) return;
+      tocLinks.forEach(a => a.classList.toggle(
+        'active', a.getAttribute('href') === '#' + en.target.id
+      ));
+    });
+  }, { rootMargin: '-70px 0px -70% 0px', threshold: 0 });
+  watched.forEach(sec => spy.observe(sec));
+}
 
 document.getElementById('themeBtn').addEventListener('click', () => {
   const next = isDark() ? 'light' : 'dark';
