@@ -5,6 +5,9 @@
 **Status:** v1.3 · 43/43 tests passing on GCP (April 4, 2026)
 **Language:** Go · gRPC · HashiCorp Raft v1.7.3 · BoltDB
 
+📖 **[Read the full technical documentation →](https://vermillion-1.github.io/Distributed-RAFT-KV-Storage/)**  
+<sub>Architecture, consensus mechanics, read/write paths, failure handling and empirical results — with system diagrams.</sub>
+
 ---
 
 A **CP key-value store** built on the Raft consensus algorithm, deployed and verified on Google Cloud Platform. The system achieves linearizable reads, exactly-once writes, and sub-1.5s leader failover across 3-node and 5-node GCP clusters.
