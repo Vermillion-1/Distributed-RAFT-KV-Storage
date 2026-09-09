@@ -245,8 +245,8 @@ flowchart TD
     A3 -.-> S3
 
     style S1 fill:#2a6f97,color:#fff,stroke:#1d4f6b
-    style S2 fill:#dce8f0,stroke:#9dbdd1
-    style S3 fill:#dce8f0,stroke:#9dbdd1
+    style S2 fill:__FOLLOW_FILL__,stroke:__FOLLOW_STROKE__,color:__FOLLOW_TEXT__
+    style S3 fill:__FOLLOW_FILL__,stroke:__FOLLOW_STROKE__,color:__FOLLOW_TEXT__
     style A1 fill:#b8791f,color:#fff,stroke:#8a5a17
     style A2 fill:#b8791f,color:#fff,stroke:#8a5a17
     style A3 fill:#b8791f,color:#fff,stroke:#8a5a17
@@ -588,11 +588,20 @@ async function render() {
     flowchart: { curve: 'basis', htmlLabels: true },
     sequence: { actorMargin: 42, width: 150 }
   });
+  const dark = isDark();
+  const palette = dark
+    ? { FOLLOW_FILL: '#1f3b4d', FOLLOW_STROKE: '#3d6a85', FOLLOW_TEXT: '#e6e9ee' }
+    : { FOLLOW_FILL: '#dce8f0', FOLLOW_STROKE: '#9dbdd1', FOLLOW_TEXT: '#1a1d21' };
+
   const nodes = document.querySelectorAll('pre.mermaid');
   for (let i = 0; i < nodes.length; i++) {
     const id = 'mmd-' + i + '-' + Date.now();
+    let src = sources[i];
+    for (const [k, v] of Object.entries(palette)) {
+      src = src.replaceAll('__' + k + '__', v);
+    }
     try {
-      const { svg } = await mermaid.render(id, sources[i]);
+      const { svg } = await mermaid.render(id, src);
       nodes[i].innerHTML = svg;
       nodes[i].removeAttribute('data-processed');
     } catch (e) {
