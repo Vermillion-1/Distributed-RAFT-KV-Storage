@@ -32,8 +32,8 @@ If you want the full picture: read each phase section in order. Each section ope
 | MTTR (leader kill → new leader) | **~1.2 s** (randomized; see Phase 1) | Phase 1 L1, Phase 6 N6a |
 | Key recovery ratio | **100%** (3/3 scenarios) | Phase 4 D1–D3 |
 | Test suite pass rate (3-node v1.2) | **33/36** | March 29, 2026 (pre-fix) |
-| Test suite pass rate (5-node) | **37/37** | April 1, 2026 (post BUG-4/5/6 fix) |
-| Test suite pass rate (3-node v1.3) | **37/37** | April 4, 2026 (final GCP run) |
+| Test suite pass rate (5-node) | **36/37** | April 1, 2026 (post BUG-4/5/6 fix; one L3 timing failure at N=5) |
+| Test suite pass rate (3-node v1.3) | **37/37** | April 4, 2026 (final GCP run, post BUG-7 fix) |
 | Follower read suite (Phase 7) | **5/5** | April 4, 2026 (v1.3 FEAT-RI) |
 
 ---
@@ -56,9 +56,13 @@ Three tests failed:
 
 After BUG-4/5/6 fixes: 36 of 37 tests passed. One failure was a timing issue in L3 (quorum loss detection) that was intermittent and reproducible only at N=5. A small timing adjustment resolved it.
 
-### Run 3 (April 4, 2026) — 3-node v1.3 — 37/37
+### Run 3 (April 4, 2026) — 3-node v1.3 — 36/37 → 37/37
 
-All 37 core GCP tests pass. v1.3 also adds follower read support (FEAT-RI), which passed 5/5 in Phase 7.
+This run initially scored 36/37, surfacing one final bug:
+
+**BUG-7 (follower selector picked the test node):** Phase 3 R1 consistently showed much higher latency than the injected 2000ms netem could explain. Root cause: `random.choice([n for n in nodes if n != leader])` could select `node0` — the VM the test script itself runs on. Delaying `node0`'s NIC also delayed the `kv-client` process on that VM, so the test was measuring "slow test client," not "slow follower." Fix: exclude `node0` as well as the leader when choosing a follower to slow down (`GCP_verify_phase3.sh:135`). After this fix, all 37 core GCP tests pass.
+
+v1.3 also adds follower read support (FEAT-RI), which passed 5/5 in Phase 7.
 
 ---
 
@@ -266,7 +270,7 @@ This is the most rigorous Phase 6 test. The sequence:
 
 | Assertion | Test | Result |
 |-----------|------|--------|
-| New leader elected after partition | N6a | PASS — MTTR ~1.25s |
+| New leader elected after partition | N6a | PASS — MTTR ~1.2s |
 | Term advanced (stale responses rejected) | N6b | PASS — term incremented |
 | Isolated leader rejected write | N6c | PASS — returned not-leader/timeout |
 | New leader accepts writes | N6d | PASS — cluster operational |
@@ -350,7 +354,7 @@ The 5-node result proves the `⌊N/2⌋+1` quorum math is correctly parameterize
 
 The experimental results across three GCP runs confirm five properties:
 
-**1. Correctness under failure is bounded and deterministic.** MTTR = ~1.25s on every run, matching the theoretical `HeartbeatTimeout + ElectionTimeout`. The system does not silently degrade — it either serves a correct answer within the SLA or blocks until it can.
+**1. Correctness under failure is bounded.** MTTR clustered around ~1.2s across runs, set by the randomized detection window rather than by a fixed interval (see Phase 1). The system does not silently degrade — it either serves a correct answer or blocks until it can.
 
 **2. CP is actively enforced, not just passively achieved.** Tests P2c, L3b, and N6c each attempt a write to a partition that cannot reach quorum. All three correctly return errors. The system blocks availability proactively rather than risking a stale commit.
 

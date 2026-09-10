@@ -55,7 +55,7 @@ Each VM runs exactly two processes. The sidecar agent operates at the OS level (
 
 | Phase | Focus | Tests |
 |-------|-------|-------|
-| P1 — Liveness | Leader failover, MTTR (~1.25s) | L1, L3b, L1c |
+| P1 — Liveness | Leader failover, MTTR (~1.2s) | L1, L3b, L1c |
 | P2 — Partitions | CP safety, minority unavailability | P2a, P2c |
 | P3 — Latency | Write throughput under follower/leader delay | R1, R2 |
 | P4 — Durability | Cluster wipe, dirty crash, snapshot catch-up | D1, D2, D3 |
@@ -70,7 +70,7 @@ Key performance numbers:
 | Baseline throughput | 62.9 ops/sec (15.9 ms/op) |
 | Slow-follower throughput | 61.3 ops/sec (−2.5%, quorum bypass confirmed) |
 | Leader-fault throughput | 0.6 ops/sec (−99%, election fires — expected) |
-| MTTR (SIGKILL or iptables) | ~1.25s |
+| MTTR (SIGKILL or iptables) | ~1.2s |
 | Key recovery ratio | 100% |
 
 ---

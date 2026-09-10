@@ -89,7 +89,7 @@ ElectionTimeout:      750ms
 SnapshotThreshold:    10 log entries
 ```
 
-The 500ms heartbeat and 750ms election timeout are tuned for GCP cross-zone latency (~15ms RTT). The ratio (1.5×) is below HashiCorp's recommended 5–10× but was empirically validated: the full 37-test suite passes with zero false elections, and one observed spurious election in P3 R2 was self-healing within one term.
+The 500ms heartbeat and 750ms election timeout are tuned for GCP cross-zone latency (~15ms RTT, estimated). The ratio (1.5×) is below HashiCorp's recommended 5–10× but held up under test: the full 37-test suite passes, and the only election observed outside a leader-kill was in P3 R2b — triggered by a deliberately injected 500ms delay on the leader's NIC, where electing a new leader is the correct response rather than a false positive.
 
 ### Leader Election
 
@@ -110,7 +110,7 @@ the vote itself takes about one round-trip. The GCP harness also times this with
 
 ### Quorum and N=5 Generalization
 
-With N=5 nodes, quorum = ⌊5/2⌋ + 1 = **3**. The full 6-phase suite was run on a 5-node GCP cluster (April 1, 2026) and confirmed 37/37. The 3-kill threshold test (killing 3 nodes makes the cluster unavailable exactly at the quorum boundary) passed correctly.
+With N=5 nodes, quorum = ⌊5/2⌋ + 1 = **3**. The full 6-phase suite was run on a 5-node GCP cluster (April 1, 2026) and scored 36/37 — the single failure was an intermittent timing issue in L3 (quorum loss detection) that only reproduced at N=5, resolved with a timing adjustment. The 3-kill threshold test (killing 3 nodes makes the cluster unavailable exactly at the quorum boundary) passed correctly.
 
 ---
 
@@ -168,7 +168,7 @@ kv-store (leader)
   │  (3) returns value
 ```
 
-`VerifyLeader()` adds one round-trip (~30ms cross-zone on GCP) to every read. This prevents a deposed leader (one that lost connectivity to the majority) from serving stale data to a client that still believes it is the leader.
+`VerifyLeader()` adds one round-trip (~15ms cross-zone RTT on GCP, estimated) to every read. This prevents a deposed leader (one that lost connectivity to the majority) from serving stale data to a client that still believes it is the leader.
 
 **Tested by:** P2c (isolated leader cannot serve reads), L3b (CP safety confirmed), N6c (iptables-partitioned leader rejects writes and reads).
 
@@ -299,7 +299,7 @@ All tests run from `node0` on GCP. Each phase has a dedicated script (`GCP_verif
 
 | Test | What it does |
 |------|-------------|
-| L1 | Kill leader via SIGKILL; measure time until new leader elected and cluster accepts writes (MTTR ~1.25s) |
+| L1 | Kill leader via SIGKILL; measure time until new leader elected and cluster accepts writes (MTTR ~1.2s) |
 | L1c | After failover, verify RSM consistency: all 3 nodes agree on the same key-value state |
 | L3b | Partition leader (iptables); verify cluster elects new leader and CP safety holds |
 
@@ -357,7 +357,7 @@ Measured on a 3-node GCP cluster (`us-central1-a` + `us-central1-c`, e2-micro VM
 | Metric | Value |
 |--------|-------|
 | Baseline write throughput | **62.9 ops/sec** (15.9 ms/op) |
-| Baseline read throughput | Similar (VerifyLeader adds ~30ms cross-zone) |
+| Baseline read throughput | Similar (VerifyLeader adds ~15ms cross-zone) |
 
 ### Quorum Bypass (Slow Follower)
 
@@ -369,7 +369,7 @@ With 2000ms netem on one of two followers:
 
 With 500ms netem on the leader:
 - Throughput: **0.6 ops/sec** (−99%)
-- Explanation: the election fires (leader's heartbeats to followers are delayed, followers time out). During election (~1.25s), all writes block. After the new leader is elected, throughput recovers — but the test window captures the transition, so the average is very low. This is correct behavior.
+- Explanation: the election fires (leader's heartbeats to followers are delayed, followers time out). During election (~1.2s), all writes block. After the new leader is elected, throughput recovers — but the test window captures the transition, so the average is very low. This is correct behavior.
 
 ### MTTR Breakdown
 
@@ -412,7 +412,19 @@ dominates, not the fault mechanism. It varies run to run because that timer is r
 
 ---
 
-### BUG-6: Follower Selector Picked the Test Node
+### BUG-6: R2b Treated a Valid Election as a Failure
+
+**Symptom:** After fixing BUG-5, the R2b slow-leader test began failing — a 500ms delay on the leader's NIC now genuinely triggered an election.
+
+**Root cause:** The assertion treated *any* election as a failure. But with a 500ms delay against a 500ms `HeartbeatTimeout`, an election is the correct Raft response, not a defect — the leader can no longer heartbeat its followers in time, so they rightly elect someone who can.
+
+**Fix:** Accept both valid outcomes — either the leader stays up (the delay did not reach the effective election threshold) or a new leader is elected and the cluster recovers. Only "no leader at all after the delay is removed" counts as a failure (`GCP_verify_phase3.sh:232-236`).
+
+**Impact:** The test was asserting the wrong invariant. The bug was in the test's expectations, not in the system — a reminder that a failing chaos test can mean the assertion is wrong, just as a passing one can mean the fault never fired (BUG-4).
+
+---
+
+### BUG-7: Follower Selector Picked the Test Node
 
 **Symptom:** Phase 3 R1 consistently showed much higher latency than the 2000ms netem could explain.
 
@@ -420,4 +432,8 @@ dominates, not the fault mechanism. It varies run to run because that timer is r
 
 **Fix:** `followers = [n for n in all_nodes if n not in [leader, "node0"]]`
 
-**Impact:** This was the final blocking bug before 37/37. After this fix, the suite score went from 36/37 to 37/37 (April 4, 2026).
+**Impact:** This was the final blocking bug. It surfaced on the April 4, 2026 3-node v1.3 run, which
+scored 36/37 until it was fixed — after which the suite reached 37/37.
+
+**Fixed in:** `GCP_verify_phase3.sh:135` — the follower selection now excludes both the current
+leader and `node0`.
