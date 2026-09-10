@@ -336,9 +336,9 @@
     </div>
     <div class="path">
       <h4>Assessing the work?</h4>
-      <p><a href="#limits">Chapter 9</a> and the separate
-      <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md">known-issues
-      file</a> list every defect found, including in the docs themselves.</p>
+      <p><a href="#limits">Chapter 9</a> and
+      <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md"><code>existing_issues.md</code></a>
+      state plainly what these results do and do not support.</p>
     </div>
   </div>
 
@@ -990,7 +990,7 @@ stateDiagram-v2
     Test IDs shown are representative, not exhaustive. Phase 6's denominator is not fully fixed —
     several checks report success without a matching failure branch, so they can drop out of the
     count rather than fail. See
-    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md#33-phase-6s-test-count-varies-by-run"><code>existing_issues.md</code> §3.3</a>.
+    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md#14-phase-6s-denominator-is-not-fixed"><code>existing_issues.md</code> §1.4</a>.
   </small></p>
 
   <h3 id="res-quorum">The quorum bypass</h3>
@@ -1064,9 +1064,8 @@ stateDiagram-v2
   </table>
 
   <div class="callout">
-    <p><strong>A full defect list</strong> — including errors found in this documentation itself,
-    contradictions between the project's own documents, and the measurement gaps above — is
-    maintained separately in
+    <p><strong>A fuller treatment</strong> of these limitations — what bounds each measurement, and
+    the roadmap for addressing them — is maintained in
     <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md"><code>existing_issues.md</code></a>.</p>
     <p><strong>If continued, in order:</strong> (1) re-measure failover with millisecond timing over
     many trials and report a distribution; (2) record operation histories and run them through

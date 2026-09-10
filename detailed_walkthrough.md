@@ -106,7 +106,7 @@ votes — `randomTimeout` returns a value in `[T, 2T)` (`hashicorp/raft@v1.7.3 u
 detection fires uniformly in `[500ms, 1000ms)` and the election deadline falls in `[750ms, 1500ms)`.
 `ElectionTimeout` is the deadline for an election to complete, not its duration; on a quiet cluster
 the vote itself takes about one round-trip. The GCP harness also times this with bash's `$SECONDS`
-(whole seconds), so ~1.2s is an order-of-magnitude figure. See `existing_issues.md` §1.2 and §3.1.
+(whole seconds), so ~1.2s is an order-of-magnitude figure. See `existing_issues.md` §1.1.
 
 ### Quorum and N=5 Generalization
 
@@ -382,7 +382,7 @@ t=500-1000ms   Follower detection timer fires (randomized) → election starts
 
 Observed MTTR is ~1.2s across both SIGKILL and iptables partition fault types — the detection timer
 dominates, not the fault mechanism. It varies run to run because that timer is randomized; see
-`existing_issues.md` §1.2.
+`existing_issues.md` §1.1.
 
 ---
 

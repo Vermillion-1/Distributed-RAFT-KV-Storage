@@ -81,7 +81,7 @@ All 37 core GCP tests pass. v1.3 also adds follower read support (FEAT-RI), whic
 
 Note also that `ElectionTimeout` is the deadline for an election to *complete* before retrying, not the time an election takes — on a quiescent cluster the first follower to time out wins immediately with two votes (self + one other), which costs about one round-trip. So the earlier framing of "1250 ms theoretical minimum = 500 + 750" was not a valid derivation.
 
-Finally, the harness measures this with bash's `$SECONDS` (whole-second granularity), so ~1.2 s should be read as an order-of-magnitude result. Millisecond timing across 20+ trials, reported as a median with min/max, is the correct measurement — see `existing_issues.md` §3.1.
+Finally, the harness measures this with bash's `$SECONDS` (whole-second granularity), so ~1.2 s should be read as an order-of-magnitude result. Millisecond timing across 20+ trials, reported as a median with min/max, is the correct measurement — see `existing_issues.md` §1.1.
 
 ### Failover Timeline
 
