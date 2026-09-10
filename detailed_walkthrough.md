@@ -374,14 +374,15 @@ With 500ms netem on the leader:
 ### MTTR Breakdown
 
 ```
-t=0ms    Last heartbeat from old leader
-t=500ms  Follower election timeout fires → election starts
-t=750ms  Election timeout window → new leader elected
-t=1250ms New leader sends first AppendEntries → followers confirm
-         → Cluster accepts writes again
+t=0ms          Last heartbeat from old leader
+t=500-1000ms   Follower detection timer fires (randomized) → election starts
++~1 RTT        Candidate wins with a majority → new leader
+               → New leader sends first AppendEntries, cluster accepts writes
 ```
 
-MTTR ~1.25s is consistent across both SIGKILL and iptables partition fault types — the election timing dominates, not the fault mechanism.
+Observed MTTR is ~1.2s across both SIGKILL and iptables partition fault types — the detection timer
+dominates, not the fault mechanism. It varies run to run because that timer is randomized; see
+`existing_issues.md` §1.2.
 
 ---
 

@@ -26,8 +26,7 @@ table lists a `T6` whose description ("Follower read reflects latest write") is 
 The phantom test propagated into every summary document: `docs/index.html`, `README.md`, and
 `detailed_walkthrough.md` all quote **43/43**. The correct total is **37 + 5 = 42**.
 
-> Fix applied: all headline counts changed to 42. `analysis/results_analysis.md` still needs its
-> `T6` row removed — see 2.5.
+> Fix applied: all headline counts changed to 42, and the `T6` row removed at the source — see 2.5.
 
 ### 1.2 MTTR is described as deterministic; it is randomized · **FIXED**
 
@@ -160,10 +159,15 @@ Contradicted by the code. BoltDB backs the log store and stable store only
 (`server/node.go:89,94`); snapshots use `raft.NewFileSnapshotStore` (`server/node.go:83`); the KV
 map is in-memory. See 1.3.
 
-### 2.5 `analysis/results_analysis.md` still contains the phantom T6
+### 2.5 The phantom T6 originated in `analysis/results_analysis.md` · **FIXED**
 
-Its coverage table lists a `T6` that does not exist in `GCP_verify_phase7.sh`, and reports Phase 7
-as 6/6. This is the origin of the 43 vs 42 error in 1.1 and should be corrected at the source.
+Its coverage table listed a `T6` that does not exist in `GCP_verify_phase7.sh` and reported Phase 7
+as 6/6 — the origin of the 43-vs-42 error in 1.1.
+
+Its Phase 7 table was also misaligned with the script in a second way: it invented a "T3 = follower
+read on node2" and shifted every later ID by one, so the documented assertions did not match what
+the script asserts. Both are now corrected against `GCP_verify_phase7.sh` (T1–T5), along with the
+grand total (42) and the accompanying commentary.
 
 ### 2.6 `docs/FILE_MANIFEST.md` is stale and references files that do not exist
 
@@ -255,35 +259,22 @@ highest-value remaining engineering work.
 
 ---
 
-## 4. Licensing — **note only, no action needed**
-
-This repository stays as the group course project. Apache-2.0 is a fine choice for it and the
-license grant works as-is.
-
-One cosmetic detail for whenever this gets picked up again: the `Copyright 2025 Ankush Singh` line
-at `LICENSE:190` sits inside the license's own APPENDIX — the "How to apply the Apache License to
-your work" template — rather than in a `NOTICE` file or source headers, and the year reads 2025
-while the history runs March–April 2026. Worth tidying at the point this is forked into a personal
-repository and extended, not before.
-
----
-
-## 5. Smaller engineering and documentation defects
+## 4. Smaller engineering and documentation defects
 
 | # | Issue | Status |
 |---|---|---|
-| 5.1 | Mermaid multi-line node labels rendered as run-on strings ("node0 — Leaderkv-storeRaft :12000 · gRPC :50051") because mermaid v11 folds `<br>` and strips `<small>`. Fixed by moving to backtick markdown-string syntax. | **FIXED** |
-| 5.2 | Fault table documented `iptables -A`; the code uses `iptables -I` (`cmd/agent/main.go:254,261`). Functionally similar, literally different. | **FIXED** |
-| 5.3 | "Bootstraps a quorum in under two minutes" is asserted, never measured — `dynamic_deploy.sh` has no timing instrumentation. | **FIXED** (softened) |
-| 5.4 | "Distributes them over SCP with an SSH retry loop" — the retry loop (`dynamic_deploy.sh:90-100`) polls SSH readiness *before* upload. The `gcloud compute scp` calls have no retry, and under `set -euo pipefail` a failed transfer aborts the run. | **FIXED** (reworded) |
-| 5.5 | The BUG-5 narrative conflated two separate facts: the actual root cause was a `tc filter u32 match ip dport 12001` port scope (`detailed_walkthrough.md:389`), while the `eth0`/`ens4` mismatch was a related but distinct discovery. | **FIXED** |
-| 5.6 | `LeaderLeaseTimeout = 400ms` (`server/node.go:62`) is set but documented nowhere, despite being relevant to read safety. | **FIXED** (added to config table) |
-| 5.7 | No Prometheus metrics endpoint for term, commit index, or replication lag. | **OPEN** |
-| 5.8 | No pre-vote — a partitioned node rejoining with an inflated term can disrupt a stable leader. | **OPEN** |
+| 4.1 | Mermaid multi-line node labels rendered as run-on strings ("node0 — Leaderkv-storeRaft :12000 · gRPC :50051") because mermaid v11 folds `<br>` and strips `<small>`. Fixed by moving to backtick markdown-string syntax. | **FIXED** |
+| 4.2 | Fault table documented `iptables -A`; the code uses `iptables -I` (`cmd/agent/main.go:254,261`). Functionally similar, literally different. | **FIXED** |
+| 4.3 | "Bootstraps a quorum in under two minutes" is asserted, never measured — `dynamic_deploy.sh` has no timing instrumentation. | **FIXED** (softened) |
+| 4.4 | "Distributes them over SCP with an SSH retry loop" — the retry loop (`dynamic_deploy.sh:90-100`) polls SSH readiness *before* upload. The `gcloud compute scp` calls have no retry, and under `set -euo pipefail` a failed transfer aborts the run. | **FIXED** (reworded) |
+| 4.5 | The BUG-5 narrative conflated two separate facts: the actual root cause was a `tc filter u32 match ip dport 12001` port scope (`detailed_walkthrough.md:389`), while the `eth0`/`ens4` mismatch was a related but distinct discovery. | **FIXED** |
+| 4.6 | `LeaderLeaseTimeout = 400ms` (`server/node.go:62`) is set but documented nowhere, despite being relevant to read safety. | **FIXED** (added to config table) |
+| 4.7 | No Prometheus metrics endpoint for term, commit index, or replication lag. | **OPEN** |
+| 4.8 | No pre-vote — a partitioned node rejoining with an inflated term can disrupt a stable leader. | **OPEN** |
 
 ---
 
-## 6. Suggested order of work
+## 5. Suggested order of work
 
 1. **Re-measure MTTR properly** (3.1) — millisecond timing, 20+ trials, report a distribution.
    This is cheap and turns the weakest claim into the strongest one.

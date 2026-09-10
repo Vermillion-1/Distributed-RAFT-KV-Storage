@@ -29,7 +29,7 @@ If you want the full picture: read each phase section in order. Each section ope
 | Slow-follower throughput retention | **97%** (61.3 vs 62.9 ops/sec) | Phase 3 R1, 3-node v1.3 |
 | Slow-leader write latency | **1645 ms/op** | Phase 3 R2, 500ms delay (election fired) |
 | Slow-leader throughput retention | **~1%** (0.6 vs 62.9 ops/sec) | Phase 3 R2, 3-node v1.3 |
-| MTTR (leader kill → new leader) | **~1.25 s** | Phase 1 L1, Phase 6 N6a |
+| MTTR (leader kill → new leader) | **~1.2 s** (randomized; see Phase 1) | Phase 1 L1, Phase 6 N6a |
 | Key recovery ratio | **100%** (3/3 scenarios) | Phase 4 D1–D3 |
 | Test suite pass rate (3-node v1.2) | **33/36** | March 29, 2026 (pre-fix) |
 | Test suite pass rate (5-node) | **37/37** | April 1, 2026 (post BUG-4/5/6 fix) |
@@ -72,16 +72,21 @@ All 37 core GCP tests pass. v1.3 also adds follower read support (FEAT-RI), whic
 |-----------|-------|
 | HeartbeatTimeout | 500 ms |
 | ElectionTimeout | 750 ms |
-| Theoretical minimum MTTR | 500 + 750 = 1250 ms |
-| Observed MTTR (L1, SIGKILL) | ~1250 ms |
-| Observed MTTR (N6a, iptables) | ~1250 ms |
+| Detection window (randomized) | [500 ms, 1000 ms) |
+| Election deadline (randomized) | [750 ms, 1500 ms) |
+| Observed MTTR (L1, SIGKILL) | ~1.2 s |
+| Observed MTTR (N6a, iptables) | ~1.2 s |
 
-The observed MTTR matches the theoretical minimum because the detection mechanism is deterministic: followers track heartbeat arrival time, and the election timer fires exactly at HeartbeatTimeout after the last heartbeat. In a quiescent cluster (no network jitter), the first follower to timeout wins the election immediately with two votes (self + one other follower).
+**MTTR is a distribution, not a constant.** HashiCorp Raft randomizes both timers to prevent split votes: `randomTimeout` returns a value between `minVal` and `2 × minVal` (`hashicorp/raft@v1.7.3 util.go:33`), so a follower's detection timer fires uniformly in [500 ms, 1000 ms) (`raft.go:163`) and a candidate's election deadline falls in [750 ms, 1500 ms) (`raft.go:310`).
+
+Note also that `ElectionTimeout` is the deadline for an election to *complete* before retrying, not the time an election takes — on a quiescent cluster the first follower to time out wins immediately with two votes (self + one other), which costs about one round-trip. So the earlier framing of "1250 ms theoretical minimum = 500 + 750" was not a valid derivation.
+
+Finally, the harness measures this with bash's `$SECONDS` (whole-second granularity), so ~1.2 s should be read as an order-of-magnitude result. Millisecond timing across 20+ trials, reported as a median with min/max, is the correct measurement — see `existing_issues.md` §3.1.
 
 ### Failover Timeline
 
 ```
-T=0          T=500ms       T=1250ms
+T=0          T=500-1000ms   ~T=1.2s
  |               |              |
 Leader killed   Followers     New leader
  (SIGKILL)      start          elected,
@@ -294,16 +299,15 @@ This is linearizable: the value returned was committed before the read, and the 
 
 | Test | Assertion | Result |
 |------|-----------|--------|
-| T1 | Set key via leader path | PASS |
-| T2 | Follower read (node1) returns correct value | PASS |
-| T3 | Follower read (node2) returns correct value | PASS |
-| T4 | Missing key via follower read returns "not found" (not a redirect) | PASS |
-| T5 | Normal (non-follower-read) Get still works via leader redirect | PASS |
-| T6 | Follower read reflects latest write (updated value visible) | PASS |
+| T1 | Set `testkey=hello123` via cluster | PASS |
+| T2 | Follower read returns correct value (`hello123`) | PASS |
+| T3 | Missing key returns "not found" from follower (not a redirect) | PASS |
+| T4 | Follower read reflects updated value (`updated456`) | PASS |
+| T5 | Normal leader-redirect Get still returns correct value | PASS |
 
-**T4 is notable:** before FEAT-RI, a follower receiving a GET would return "not leader" or redirect. With follower reads enabled, it serves the result locally — including "not found" for absent keys. This test confirms that the follower-read code path is complete, not just a partial wrapper that falls back to redirect.
+**T3 is notable:** before FEAT-RI, a follower receiving a GET would return "not leader" or redirect. With follower reads enabled, it serves the result locally — including "not found" for absent keys. This test confirms that the follower-read code path is complete, not just a partial wrapper that falls back to redirect.
 
-**T6** confirms the Read-Index protocol is fresh: after writing `updated456` to the leader, the follower read returns `updated456` (not the previous `hello123`). The `appliedIndex ≥ commit_index` wait ensures the follower has replicated the latest write before responding.
+**T4** confirms the Read-Index protocol is fresh: after writing `updated456` to the leader, the follower read returns `updated456` (not the previous `hello123`). The `appliedIndex ≥ commit_index` wait ensures the follower has replicated the latest write before responding.
 
 ---
 
@@ -338,7 +342,7 @@ The 5-node result proves the `⌊N/2⌋+1` quorum math is correctly parameterize
 | P6 — Kernel Chaos | N1–N5 (network patterns), N6a–N6f (core CP) | 8+6 = variable by run | 37 total across P1–P6 |
 | **GCP Total** | **37** | — | **37/37** |
 | P7 — Follower Reads | T1, T2, T3, T4, T5 | 5 | 5/5 |
-| **Grand Total** | **43** | — | **43/43** |
+| **Grand Total** | **42** | — | **42/42** |
 
 ---
 
@@ -354,4 +358,4 @@ The experimental results across three GCP runs confirm five properties:
 
 **4. Quorum bypass is real and near-perfect.** A 2000ms delay on a minority follower reduces throughput by only 2.5% (97% retention). This is the key insight distinguishing Raft from a fully synchronous system: the minority is off the critical path for commit.
 
-**5. Linearizability extends to followers in v1.3.** The Read-Index protocol (FEAT-RI) allows followers to serve reads without leader redirection, while preserving linearizability. T2–T6 confirm this end-to-end: correct values, correct "not found" semantics, and freshness reflecting the latest committed write.
+**5. Linearizability extends to followers in v1.3.** The Read-Index protocol (FEAT-RI) allows followers to serve reads without leader redirection, while preserving linearizability. T2–T5 confirm this end-to-end: correct values, correct "not found" semantics, and freshness reflecting the latest committed write.
