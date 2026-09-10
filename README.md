@@ -1,7 +1,7 @@
 # Fault-Tolerant Distributed Key-Value Store (Raft)
 
 **Course:** CMPT 756 — Fault-Tolerant Distributed Systems
-**Team:** Group 15 — Aarish · Ankith · Dhwani · Ankush
+**Team:** Group 15 (group project)
 **Status:** v1.3 · 42/42 tests passing on GCP (April 4, 2026)
 **Language:** Go · gRPC · HashiCorp Raft v1.7.3 · BoltDB
 

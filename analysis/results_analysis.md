@@ -2,7 +2,7 @@
 
 **Project:** Distributed Raft KV Storage (CP System)
 **Course:** CMPT 756 — Fault-Tolerant Distributed Systems
-**Team:** Group 15 — Aarish · Ankith · Dhwani · Ankush
+**Team:** Group 15 (group project)
 **Environment:** Google Cloud Platform — `e2-micro`, `us-central1-a/c` (cross-zone ~15ms RTT)
 **Runs:** 3-node (March 29, 2026) · 5-node (April 1, 2026) · 3-node v1.3 (April 4, 2026)
 
