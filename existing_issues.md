@@ -255,25 +255,16 @@ highest-value remaining engineering work.
 
 ---
 
-## 4. Copyright and licensing — **OPEN, needs a decision outside the repo**
+## 4. Licensing — **note only, no action needed**
 
-`LICENSE` is the stock Apache-2.0 text, but line 190 sits **inside the license's own APPENDIX** —
-the "How to apply the Apache License to your work" template — with the placeholder filled in as
-`Copyright 2025 Ankush Singh`. That is instructional boilerplate, not an applied copyright notice
-in a `NOTICE` file or source headers, so the repository does not currently make a clean copyright
-assertion anywhere. The year also reads 2025 while the git history runs March–April 2026.
+This repository stays as the group course project. Apache-2.0 is a fine choice for it and the
+license grant works as-is.
 
-Two things are genuinely unresolved and should not be guessed at:
-
-1. **Who owns copyright in coursework produced for a class at SFU.** University IP policies vary,
-   and this needs to be read against SFU's actual policy rather than assumed.
-2. **Joint authorship.** Even setting the university question aside, this was submitted as a
-   four-person course project. A sole-holder notice is the strongest possible claim and the one
-   most likely to be wrong.
-
-Lowest-risk option until that is settled: remove the filled-in appendix line so `LICENSE` is
-unmodified stock Apache-2.0 text. The license grant still works — it is what lets others use the
-code — without the repository asserting who holds the copyright.
+One cosmetic detail for whenever this gets picked up again: the `Copyright 2025 Ankush Singh` line
+at `LICENSE:190` sits inside the license's own APPENDIX — the "How to apply the Apache License to
+your work" template — rather than in a `NOTICE` file or source headers, and the year reads 2025
+while the history runs March–April 2026. Worth tidying at the point this is forked into a personal
+repository and extended, not before.
 
 ---
 
@@ -301,8 +292,7 @@ code — without the repository asserting who holds the copyright.
 3. **Regenerate or delete `FILE_MANIFEST.md`** (2.6).
 4. **Commit raw timing data** and make `generate_graphs.py` read it (3.2).
 5. **Give every Phase 6 check a `fail` branch** (3.3).
-6. **Settle the copyright line** (4).
-7. **Add a linearizability checker** (3.7) — the highest-value new engineering.
+6. **Add a linearizability checker** (3.7) — the highest-value new engineering.
 
 ---
 
