@@ -255,39 +255,7 @@ highest-value remaining engineering work.
 
 ---
 
-## 4. Attribution — **RESOLVED**
-
-The footer credits "CMPT 756, Group 15 (Aarish · Ankith · Dhwani · Ankush)".
-
-Git history across both the public repo and the original prototype:
-
-| Author | Commits | Touches |
-|---|---|---|
-| Ankush Singh (2 emails) | 30 | All Go source — `server/`, `cmd/`, `proto/`, `main.go` — plus scripts, analysis, docs |
-| Dhwani Patel | 7 | Markdown formatting only — see below |
-| Aarish | 0 | — |
-| Ankith | 0 | — |
-
-Dhwani Patel's seven commits all landed on 2026-04-08 between 17:24 and 17:30 — a six-minute
-window, four days after the final GCP run. Every diff is symmetric (1+/1−, 27+/27−, 36+/36−): lines
-rewritten in place with no new content, removing emoji from headings and table rows. Five of the six
-files touched (`docs/1_QUICKSTART.md` … `docs/5_CODE.md`) no longer exist — that documentation
-structure was replaced.
-
-The prototype repo is 24 commits, 100% Ankush Singh, across all branches.
-
-This may simply reflect one person operating git for a course team, which is common and not
-dishonest. But as originally written, a reader inferred shared code authorship for four people, and
-the repository does not support that.
-
-**Resolution:** the footer now credits implementation, chaos-testing infrastructure, analysis and
-documentation to Ankush Singh, and separately notes the work was submitted as part of a four-person
-course team, naming all four. Nothing is erased — the team credit stands — but no per-person
-contribution claims are made beyond what the history supports.
-
----
-
-## 4b. Copyright and licensing — **OPEN, needs a decision outside the repo**
+## 4. Copyright and licensing — **OPEN, needs a decision outside the repo**
 
 `LICENSE` is the stock Apache-2.0 text, but line 190 sits **inside the license's own APPENDIX** —
 the "How to apply the Apache License to your work" template — with the placeholder filled in as
@@ -333,7 +301,7 @@ code — without the repository asserting who holds the copyright.
 3. **Regenerate or delete `FILE_MANIFEST.md`** (2.6).
 4. **Commit raw timing data** and make `generate_graphs.py` read it (3.2).
 5. **Give every Phase 6 check a `fail` branch** (3.3).
-6. **Decide the attribution wording** (4).
+6. **Settle the copyright line** (4).
 7. **Add a linearizability checker** (3.7) — the highest-value new engineering.
 
 ---
