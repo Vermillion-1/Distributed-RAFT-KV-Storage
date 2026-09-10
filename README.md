@@ -2,7 +2,7 @@
 
 **Course:** CMPT 756 — Fault-Tolerant Distributed Systems
 **Team:** Group 15 — Aarish · Ankith · Dhwani · Ankush
-**Status:** v1.3 · 43/43 tests passing on GCP (April 4, 2026)
+**Status:** v1.3 · 42/42 tests passing on GCP (April 4, 2026)
 **Language:** Go · gRPC · HashiCorp Raft v1.7.3 · BoltDB
 
 📖 **[Read the full technical documentation →](https://vermillion-1.github.io/Distributed-RAFT-KV-Storage/)**  
@@ -40,10 +40,10 @@ Each VM runs exactly two processes. The sidecar agent operates at the OS level (
 
 | Feature | Description | Evidence |
 |---------|-------------|----------|
-| **Follower Reads (v1.3)** | Read-Index protocol: follower asks leader for `commit_index` N, waits until `appliedIndex ≥ N`, serves read locally. Linearizable reads without routing every GET to leader. | `GCP_verify_phase7.sh` 6/6 |
+| **Follower Reads (v1.3)** | Read-Index protocol: follower asks leader for `commit_index` N, waits until `appliedIndex ≥ N`, serves read locally. Linearizable reads without routing every GET to leader. | `GCP_verify_phase7.sh` 5/5 |
 | **Exactly-Once Writes** | Per-client `(client_id, seq_num)` dedup table in FSM. Retried write after leader change is silently dropped — value never applied twice. | P5 I2/I3 PASS |
 | **Linearizable Reads (Leader)** | `VerifyLeader()` heartbeat before every GET. Deposed leader cannot serve stale data. Minority partition → reads blocked (CP enforced). | P2c, L3b, N6c PASS |
-| **Deployment Engine** | Provisions N GCP VMs, cross-compiles `linux/amd64` on macOS, SSH retry loop, bootstraps full N-node quorum in < 2 minutes. | 37/37 GCP confirmed |
+| **Deployment Engine** | Provisions N GCP VMs, cross-compiles `linux/amd64` on macOS, waits for SSH readiness with a retry loop, then distributes binaries and bootstraps a full N-node quorum. | 37/37 GCP confirmed |
 | **Sidecar Fault Injection** | Bidirectional `iptables` (INPUT+OUTPUT DROP) per Raft port. NIC auto-detect via `ip route get 8.8.8.8`. Kill, pause, partition, netem, restart. | N6a–N6c PASS |
 | **Aggressive Snapshotting** | `SnapshotThreshold=10` entries → `InstallSnapshot` RPC teleports full FSM state to any lagging replica on restart. | D3: 30 missed → 100% recovery |
 
@@ -51,7 +51,7 @@ Each VM runs exactly two processes. The sidecar agent operates at the OS level (
 
 ## Test Results
 
-**37/37** on GCP 6-phase suite · **+6/6** Phase 7 (follower reads) · **43 tests total**
+**37/37** on GCP 6-phase suite · **+5/5** Phase 7 (follower reads) · **42 tests total**
 
 | Phase | Focus | Tests |
 |-------|-------|-------|
@@ -122,7 +122,7 @@ bash GCP_verify_phase7.sh   # follower reads (v1.3)
 │   ├── agent/                 # node-agent sidecar (fault injection HTTP API)
 │   └── dashboard/             # kv-dashboard web UI
 ├── proto/kv.proto             # gRPC service definitions
-├── GCP_verify_phase[1-7].sh   # Automated test phases (43 tests total)
+├── GCP_verify_phase[1-7].sh   # Automated test phases (42 tests total)
 ├── dynamic_deploy.sh          # GCP cluster provisioning
 ├── local_deploy.sh            # Local 3-node cluster launcher
 └── docs/

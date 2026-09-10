@@ -16,7 +16,7 @@ If you only have a few minutes: read [Key Metrics at a Glance](#key-metrics-at-a
 
 If you want the full picture: read each phase section in order. Each section opens with the test goal, then walks through the results, interprets the numbers, and points to the evidence.
 
-**Total tests:** 37 (GCP phases 1–6) + 6 (Phase 7 follower reads) = **43 tests total, all passing.**
+**Total tests:** 37 (GCP phases 1–6) + 5 (Phase 7 follower reads) = **42 tests total, all passing.**
 
 ---
 
@@ -34,7 +34,7 @@ If you want the full picture: read each phase section in order. Each section ope
 | Test suite pass rate (3-node v1.2) | **33/36** | March 29, 2026 (pre-fix) |
 | Test suite pass rate (5-node) | **37/37** | April 1, 2026 (post BUG-4/5/6 fix) |
 | Test suite pass rate (3-node v1.3) | **37/37** | April 4, 2026 (final GCP run) |
-| Follower read suite (Phase 7) | **6/6** | April 4, 2026 (v1.3 FEAT-RI) |
+| Follower read suite (Phase 7) | **5/5** | April 4, 2026 (v1.3 FEAT-RI) |
 
 ---
 
@@ -58,7 +58,7 @@ After BUG-4/5/6 fixes: 36 of 37 tests passed. One failure was a timing issue in 
 
 ### Run 3 (April 4, 2026) — 3-node v1.3 — 37/37
 
-All 37 core GCP tests pass. v1.3 also adds follower read support (FEAT-RI), which passed 6/6 in Phase 7.
+All 37 core GCP tests pass. v1.3 also adds follower read support (FEAT-RI), which passed 5/5 in Phase 7.
 
 ---
 
@@ -337,7 +337,7 @@ The 5-node result proves the `⌊N/2⌋+1` quorum math is correctly parameterize
 | P5 — Idempotency | I1a, I1b, I2a, I2b, I3a, I3b, I4a, I4b | 8 | 8/8 |
 | P6 — Kernel Chaos | N1–N5 (network patterns), N6a–N6f (core CP) | 8+6 = variable by run | 37 total across P1–P6 |
 | **GCP Total** | **37** | — | **37/37** |
-| P7 — Follower Reads | T1, T2, T3, T4, T5, T6 | 6 | 6/6 |
+| P7 — Follower Reads | T1, T2, T3, T4, T5 | 5 | 5/5 |
 | **Grand Total** | **43** | — | **43/43** |
 
 ---

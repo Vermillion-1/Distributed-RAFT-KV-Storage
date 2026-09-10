@@ -104,7 +104,7 @@ bash ~/GCP_verify_phase6.sh    # Kernel chaos (iptables bidirectional partition)
 bash ~/GCP_verify_phase7.sh    # Follower reads (Read-Index, v1.3)
 ```
 
-Each script prints PASS/FAIL per test with diagnostic output. Expected result: **43/43** (37 phases 1–6 + 6 phase 7).
+Each script prints PASS/FAIL per test with diagnostic output. Expected result: **42/42** (37 phases 1–6 + 5 phase 7).
 
 ### Step 5: Teardown (Important — stops GCP billing)
 

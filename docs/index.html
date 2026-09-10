@@ -4,50 +4,65 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Distributed Raft KV Store — Technical Documentation</title>
-<meta name="description" content="A fault-tolerant CP key-value store implementing Raft consensus in Go, chaos-tested on GCP. Architecture, consensus mechanics, failure handling and empirical results.">
+<meta name="description" content="A fault-tolerant CP key-value store built on Raft consensus in Go, deployed on GCP and chaos-tested with OS-level fault injection. Architecture, consensus mechanics, failure handling and empirical results, written to be read end to end.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
+  /* ---------- pastel light palette (default) ---------- */
   :root{
-    --bg:#ffffff; --bg-alt:#f7f8fa; --bg-code:#f4f5f7;
-    --fg:#1a1d21; --fg-muted:#5b6570; --fg-faint:#8b949e;
-    --line:#e3e6ea; --accent:#2a6f97; --accent-soft:#e8f0f6;
-    --ok:#2f7d4f; --warn:#b8791f; --bad:#c0453b;
+    --bg:#fdfbf8; --bg-alt:#f6f1ea; --bg-code:#f4efe8;
+    --fg:#2f2d35; --fg-muted:#635f6d; --fg-faint:#918d9c;
+    --line:#e9e1d6; --line-soft:#f0e9df;
+
+    --accent:#5b7f9e; --accent-soft:#e6eef4;
+    --lilac:#7f6f9e; --lilac-soft:#eeeaf5;
+    --ok:#54876a; --ok-soft:#e6f0e9;
+    --warn:#a8813f; --warn-soft:#f7efdf;
+    --bad:#a96562; --bad-soft:#f7e9e8;
+
     --mono:'JetBrains Mono',ui-monospace,SFMono-Regular,Menlo,monospace;
     --sans:'Inter',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
-    --maxw:880px;
+    --maxw:840px;
   }
   @media (prefers-color-scheme:dark){
     :root:not([data-theme="light"]){
-      --bg:#0f1216; --bg-alt:#161a20; --bg-code:#171b21;
-      --fg:#e6e9ee; --fg-muted:#9aa5b1; --fg-faint:#6b7681;
-      --line:#242a32; --accent:#6fb3d9; --accent-soft:#152530;
-      --ok:#5fbf85; --warn:#e0a94a; --bad:#e07a70;
+      --bg:#14131a; --bg-alt:#1c1b24; --bg-code:#1e1d27;
+      --fg:#e9e6ef; --fg-muted:#a29eb0; --fg-faint:#757183;
+      --line:#2b2936; --line-soft:#232230;
+      --accent:#8fb3cc; --accent-soft:#1c2a35;
+      --lilac:#b0a2cd; --lilac-soft:#231f30;
+      --ok:#87bd9c; --ok-soft:#1a2721;
+      --warn:#dcb26c; --warn-soft:#2b2417;
+      --bad:#d99b98; --bad-soft:#2c1e1e;
     }
   }
   :root[data-theme="dark"]{
-    --bg:#0f1216; --bg-alt:#161a20; --bg-code:#171b21;
-    --fg:#e6e9ee; --fg-muted:#9aa5b1; --fg-faint:#6b7681;
-    --line:#242a32; --accent:#6fb3d9; --accent-soft:#152530;
-    --ok:#5fbf85; --warn:#e0a94a; --bad:#e07a70;
+    --bg:#14131a; --bg-alt:#1c1b24; --bg-code:#1e1d27;
+    --fg:#e9e6ef; --fg-muted:#a29eb0; --fg-faint:#757183;
+    --line:#2b2936; --line-soft:#232230;
+    --accent:#8fb3cc; --accent-soft:#1c2a35;
+    --lilac:#b0a2cd; --lilac-soft:#231f30;
+    --ok:#87bd9c; --ok-soft:#1a2721;
+    --warn:#dcb26c; --warn-soft:#2b2417;
+    --bad:#d99b98; --bad-soft:#2c1e1e;
   }
 
   *{box-sizing:border-box}
-  html{scroll-behavior:smooth; scroll-padding-top:70px}
+  html{scroll-behavior:smooth; scroll-padding-top:74px}
   body{
     margin:0; background:var(--bg); color:var(--fg);
-    font-family:var(--sans); font-size:16px; line-height:1.65;
+    font-family:var(--sans); font-size:16.5px; line-height:1.68;
     -webkit-font-smoothing:antialiased;
   }
 
-  /* ---- nav ---- */
   nav{
-    position:sticky; top:0; z-index:50; background:color-mix(in srgb,var(--bg) 88%,transparent);
+    position:sticky; top:0; z-index:50;
+    background:color-mix(in srgb,var(--bg) 90%,transparent);
     backdrop-filter:blur(10px); border-bottom:1px solid var(--line);
   }
   .nav-inner{
-    max-width:var(--maxw); margin:0 auto; padding:.6rem 1.25rem;
+    max-width:1220px; margin:0 auto; padding:.6rem 1.5rem;
     display:flex; align-items:center; gap:1.1rem; overflow-x:auto; scrollbar-width:none;
   }
   .nav-inner::-webkit-scrollbar{display:none}
@@ -56,126 +71,146 @@
     white-space:nowrap; padding:.25rem 0; border-bottom:2px solid transparent;
   }
   .nav-inner a:hover{color:var(--accent); border-bottom-color:var(--accent)}
-  .nav-brand{font-weight:700; color:var(--fg)!important; margin-right:.3rem}
+  .nav-brand{font-weight:700; color:var(--fg)!important; margin-right:.3rem; letter-spacing:-.01em}
   #themeBtn{
     margin-left:auto; background:none; border:1px solid var(--line); color:var(--fg-muted);
-    border-radius:6px; padding:.25rem .5rem; cursor:pointer; font-size:.85rem; line-height:1;
+    border-radius:7px; padding:.28rem .55rem; cursor:pointer; font-size:.85rem; line-height:1;
   }
   #themeBtn:hover{color:var(--accent); border-color:var(--accent)}
 
-  /* ---- layout: sidebar + content ---- */
   .shell{
-    display:grid; grid-template-columns:232px minmax(0,1fr);
-    gap:2.5rem; max-width:1200px; margin:0 auto; padding:0 1.5rem;
+    display:grid; grid-template-columns:262px minmax(0,1fr);
+    gap:2.8rem; max-width:1220px; margin:0 auto; padding:0 1.5rem;
   }
   aside{
-    position:sticky; top:58px; align-self:start; max-height:calc(100vh - 74px);
-    overflow-y:auto; padding:2rem 0 3rem; scrollbar-width:thin;
+    position:sticky; top:56px; align-self:start; max-height:calc(100vh - 72px);
+    overflow-y:auto; padding:1.8rem 0 3rem; scrollbar-width:thin;
   }
   aside .toc-title{
-    font-size:.7rem; text-transform:uppercase; letter-spacing:.11em;
-    color:var(--fg-faint); font-weight:600; margin:0 0 .8rem;
+    font-size:.68rem; text-transform:uppercase; letter-spacing:.12em;
+    color:var(--fg-faint); font-weight:600; margin:0 0 .7rem;
   }
-  aside ol{list-style:none; padding:0; margin:0; counter-reset:toc}
+  aside ul{list-style:none; padding:0; margin:0}
   aside li{margin:0}
   aside a{
-    display:block; padding:.4rem .7rem .4rem .75rem; font-size:.855rem;
-    color:var(--fg-muted); text-decoration:none; border-left:2px solid var(--line);
-    line-height:1.35; transition:color .12s, border-color .12s;
+    display:block; padding:.34rem .7rem; font-size:.845rem;
+    color:var(--fg-muted); text-decoration:none; border-left:2px solid var(--line-soft);
+    line-height:1.38; transition:color .12s, border-color .12s, background .12s;
   }
   aside a:hover{color:var(--accent); border-left-color:var(--accent)}
-  aside a.active{
-    color:var(--accent); font-weight:600; border-left-color:var(--accent);
-    background:var(--accent-soft);
-  }
+  aside a.lvl1{font-weight:600; color:var(--fg)}
+  aside a.lvl2{padding-left:1.5rem; font-size:.79rem}
+  aside a.active{color:var(--accent); border-left-color:var(--accent); background:var(--accent-soft)}
   aside .toc-foot{
     margin-top:1.4rem; padding-top:1rem; border-top:1px solid var(--line);
-    font-size:.78rem; line-height:1.5;
+    font-size:.78rem; line-height:1.55;
   }
   aside .toc-foot a{border:none; padding:.15rem 0; font-size:.78rem}
   aside .toc-foot a:hover{background:none}
   main{max-width:var(--maxw); margin:0; padding:0 0 6rem; min-width:0}
-  @media(max-width:940px){
-    .shell{grid-template-columns:1fr; gap:0}
-    aside{display:none}
-  }
-  section{padding-top:3.2rem}
-  h1{font-size:2.35rem; line-height:1.18; letter-spacing:-.022em; margin:0 0 .5rem}
+  @media(max-width:980px){ .shell{grid-template-columns:1fr; gap:0} aside{display:none} }
+
+  section{padding-top:3.4rem}
+  h1{font-size:2.4rem; line-height:1.14; letter-spacing:-.025em; margin:0 0 .5rem}
   h2{
-    font-size:1.42rem; letter-spacing:-.014em; margin:0 0 1rem;
-    padding-bottom:.45rem; border-bottom:1px solid var(--line);
+    font-size:1.5rem; letter-spacing:-.018em; margin:0 0 .3rem;
+    padding-bottom:.5rem; border-bottom:1px solid var(--line);
   }
-  h3{font-size:1.05rem; margin:2rem 0 .6rem; letter-spacing:-.008em}
+  h2 .chnum{
+    font-family:var(--mono); font-size:.72rem; color:var(--fg-faint);
+    letter-spacing:.1em; display:block; margin-bottom:.35rem; font-weight:500;
+  }
+  h3{font-size:1.08rem; margin:2.1rem 0 .6rem; letter-spacing:-.008em; scroll-margin-top:76px}
+  h4{font-size:.95rem; margin:1.5rem 0 .4rem; color:var(--fg-muted)}
   p{margin:0 0 1rem}
   a{color:var(--accent)}
   .lede{font-size:1.1rem; color:var(--fg-muted); margin-bottom:1.4rem}
+  .chapter-lede{color:var(--fg-muted); font-size:.98rem; margin:1rem 0 1.4rem}
   .muted{color:var(--fg-muted)}
   small{font-size:.85rem}
 
-  /* ---- hero ---- */
-  header.hero{padding:3.2rem 0 .5rem}
+  header.hero{padding:3.4rem 0 .5rem}
   .eyebrow{
-    font-family:var(--mono); font-size:.75rem; letter-spacing:.09em; text-transform:uppercase;
-    color:var(--accent); margin-bottom:.7rem;
+    font-family:var(--mono); font-size:.73rem; letter-spacing:.1em; text-transform:uppercase;
+    color:var(--lilac); margin-bottom:.7rem;
   }
   .stats{
-    display:grid; grid-template-columns:repeat(auto-fit,minmax(140px,1fr));
-    gap:.7rem; margin:1.8rem 0 .5rem;
+    display:grid; grid-template-columns:repeat(auto-fit,minmax(138px,1fr));
+    gap:.7rem; margin:1.9rem 0 .5rem;
   }
-  .stat{background:var(--bg-alt); border:1px solid var(--line); border-radius:9px; padding:.85rem .95rem}
-  .stat b{display:block; font-size:1.5rem; font-weight:700; letter-spacing:-.02em; line-height:1.1}
-  .stat span{font-size:.76rem; color:var(--fg-muted); display:block; margin-top:.25rem}
+  .stat{background:var(--bg-alt); border:1px solid var(--line); border-radius:11px; padding:.85rem .95rem}
+  .stat b{display:block; font-size:1.45rem; font-weight:700; letter-spacing:-.022em; line-height:1.1}
+  .stat span{font-size:.75rem; color:var(--fg-muted); display:block; margin-top:.25rem}
 
-  /* ---- components ---- */
   .callout{
     border-left:3px solid var(--accent); background:var(--accent-soft);
-    padding:.85rem 1.1rem; border-radius:0 8px 8px 0; margin:1.3rem 0;
+    padding:.9rem 1.15rem; border-radius:0 10px 10px 0; margin:1.35rem 0;
   }
-  .callout.warn{border-left-color:var(--warn); background:color-mix(in srgb,var(--warn) 9%,transparent)}
+  .callout.warn{border-left-color:var(--warn); background:var(--warn-soft)}
+  .callout.primer{border-left-color:var(--lilac); background:var(--lilac-soft)}
+  .callout.check{border-left-color:var(--ok); background:var(--ok-soft)}
+  .callout.bad{border-left-color:var(--bad); background:var(--bad-soft)}
   .callout p:last-child{margin-bottom:0}
   .callout strong{color:var(--fg)}
+  .callout .tag{
+    display:block; font-family:var(--mono); font-size:.68rem; letter-spacing:.1em;
+    text-transform:uppercase; color:var(--fg-faint); margin-bottom:.4rem;
+  }
 
-  table{width:100%; border-collapse:collapse; margin:1.1rem 0; font-size:.9rem; display:block; overflow-x:auto}
-  th,td{text-align:left; padding:.55rem .7rem; border-bottom:1px solid var(--line); vertical-align:top}
-  th{font-weight:600; font-size:.78rem; text-transform:uppercase; letter-spacing:.05em; color:var(--fg-muted)}
+  table{width:100%; border-collapse:collapse; margin:1.15rem 0; font-size:.895rem; display:block; overflow-x:auto}
+  th,td{text-align:left; padding:.58rem .7rem; border-bottom:1px solid var(--line-soft); vertical-align:top}
+  th{
+    font-weight:600; font-size:.75rem; text-transform:uppercase; letter-spacing:.06em;
+    color:var(--fg-muted); border-bottom:1px solid var(--line);
+  }
   tbody tr:hover{background:var(--bg-alt)}
 
-  code{font-family:var(--mono); font-size:.86em; background:var(--bg-code); padding:.12em .38em; border-radius:4px}
-  pre{background:var(--bg-code); border:1px solid var(--line); border-radius:9px; padding:1rem; overflow-x:auto; margin:1.1rem 0}
-  pre code{background:none; padding:0; font-size:.83rem; line-height:1.6}
+  code{font-family:var(--mono); font-size:.86em; background:var(--bg-code); padding:.12em .38em; border-radius:5px}
+  pre{background:var(--bg-code); border:1px solid var(--line); border-radius:10px; padding:1rem; overflow-x:auto; margin:1.15rem 0}
+  pre code{background:none; padding:0; font-size:.83rem; line-height:1.62}
 
   .diagram{
-    background:var(--bg-alt); border:1px solid var(--line); border-radius:11px;
-    padding:1.4rem 1rem; margin:1.4rem 0; overflow-x:auto; text-align:center;
+    background:var(--bg-alt); border:1px solid var(--line); border-radius:13px;
+    padding:1.5rem 1rem; margin:1.5rem 0; overflow-x:auto; text-align:center;
   }
   .diagram .mermaid{display:flex; justify-content:center; min-width:min-content}
-  .caption{font-size:.83rem; color:var(--fg-muted); margin-top:.7rem; text-align:center}
-  figure{margin:1.5rem 0; padding:0}
+  .caption{font-size:.83rem; color:var(--fg-muted); margin-top:.8rem; text-align:center; line-height:1.5}
+  figure{margin:1.6rem 0; padding:0}
   figure img{
-    width:100%; height:auto; display:block; border-radius:10px;
+    width:100%; height:auto; display:block; border-radius:11px;
     border:1px solid var(--line); background:#fff;
   }
-  figure figcaption{
-    font-size:.83rem; color:var(--fg-muted); margin-top:.6rem; text-align:center;
-  }
+  figure figcaption{font-size:.83rem; color:var(--fg-muted); margin-top:.65rem; text-align:center; line-height:1.5}
+  .shots{display:grid; grid-template-columns:1fr 1fr; gap:1rem; margin:1.6rem 0}
+  .shots figure{margin:0}
+  @media(max-width:700px){ .shots{grid-template-columns:1fr} }
 
   .pill{
-    display:inline-block; font-family:var(--mono); font-size:.72rem; padding:.15rem .5rem;
-    border-radius:20px; border:1px solid var(--line); color:var(--fg-muted); margin:0 .25rem .35rem 0;
+    display:inline-block; font-family:var(--mono); font-size:.71rem; padding:.18rem .55rem;
+    border-radius:20px; border:1px solid var(--line); background:var(--bg-alt);
+    color:var(--fg-muted); margin:0 .28rem .38rem 0;
   }
-  .pass{color:var(--ok); font-weight:600}
-  .fail{color:var(--bad); font-weight:600}
+  .pass{color:var(--ok); font-weight:700}
+  .fail{color:var(--bad); font-weight:700}
 
-  ul,ol{padding-left:1.3rem; margin:0 0 1rem}
-  li{margin-bottom:.4rem}
+  .paths{display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:.85rem; margin:1.4rem 0}
+  .path{border:1px solid var(--line); border-radius:11px; padding:.95rem 1.05rem; background:var(--bg-alt)}
+  .path h4{margin:0 0 .35rem; color:var(--fg); font-size:.92rem}
+  .path p{font-size:.85rem; color:var(--fg-muted); margin:0}
+  .path a{font-size:.85rem}
+
+  dl.glossary{margin:1.2rem 0}
+  dl.glossary dt{font-weight:600; margin-top:1rem; font-size:.94rem}
+  dl.glossary dd{margin:.15rem 0 0; color:var(--fg-muted); font-size:.92rem}
+
+  ul,ol{padding-left:1.35rem; margin:0 0 1rem}
+  li{margin-bottom:.42rem}
 
   footer{
-    border-top:1px solid var(--line); margin-top:4rem; padding-top:1.6rem;
+    border-top:1px solid var(--line); margin-top:4rem; padding-top:1.7rem;
     font-size:.86rem; color:var(--fg-muted);
   }
-  @media(max-width:640px){
-    h1{font-size:1.8rem} body{font-size:15px} .stat b{font-size:1.25rem}
-  }
+  @media(max-width:640px){ h1{font-size:1.85rem} body{font-size:15.5px} .stat b{font-size:1.25rem} }
 </style>
 </head>
 <body>
@@ -183,8 +218,9 @@
 <nav>
   <div class="nav-inner">
     <a href="#top" class="nav-brand">Raft KV</a>
-    <a href="#overview">Overview</a>
-    <a href="#scope">What Was Built</a>
+    <a href="#start">Start here</a>
+    <a href="#problem">Problem</a>
+    <a href="#scope">Scope</a>
     <a href="#architecture">Architecture</a>
     <a href="#consensus">Consensus</a>
     <a href="#paths">Read &amp; Write</a>
@@ -192,7 +228,8 @@
     <a href="#chaos">Chaos Testing</a>
     <a href="#results">Results</a>
     <a href="#limits">Limitations</a>
-    <button id="themeBtn" title="Toggle theme">◐</button>
+    <a href="#glossary">Glossary</a>
+    <button id="themeBtn" title="Toggle light / dark">◐</button>
   </div>
 </nav>
 
@@ -200,20 +237,52 @@
 
 <aside>
   <p class="toc-title">Contents</p>
-  <ol>
-    <li><a href="#overview">Overview</a></li>
-    <li><a href="#scope">What Was Built</a></li>
-    <li><a href="#architecture">System Architecture</a></li>
-    <li><a href="#consensus">Consensus Mechanics</a></li>
-    <li><a href="#paths">Read &amp; Write Paths</a></li>
-    <li><a href="#failure">Failure Handling</a></li>
-    <li><a href="#chaos">Chaos Testing</a></li>
-    <li><a href="#results">Empirical Results</a></li>
-    <li><a href="#limits">Limitations</a></li>
-  </ol>
+  <ul>
+    <li><a class="lvl1" href="#start">Start here</a></li>
+
+    <li><a class="lvl1" href="#problem">1 · The problem</a></li>
+    <li><a class="lvl2" href="#problem-split">When the network splits</a></li>
+    <li><a class="lvl2" href="#problem-cp">Choosing consistency</a></li>
+
+    <li><a class="lvl1" href="#scope">2 · What was built</a></li>
+    <li><a class="lvl2" href="#scope-library">What the library provides</a></li>
+    <li><a class="lvl2" href="#scope-engineered">What was engineered on top</a></li>
+    <li><a class="lvl2" href="#scope-fault">The fault model</a></li>
+
+    <li><a class="lvl1" href="#architecture">3 · Architecture</a></li>
+    <li><a class="lvl2" href="#arch-topology">Dual-port topology</a></li>
+    <li><a class="lvl2" href="#arch-config">Raft configuration</a></li>
+    <li><a class="lvl2" href="#arch-live">The running system</a></li>
+
+    <li><a class="lvl1" href="#consensus">4 · Consensus mechanics</a></li>
+    <li><a class="lvl2" href="#cons-log">The replicated log</a></li>
+    <li><a class="lvl2" href="#cons-election">Leader election</a></li>
+    <li><a class="lvl2" href="#cons-quorum">Why a majority</a></li>
+    <li><a class="lvl2" href="#cons-mttr">How long failover takes</a></li>
+
+    <li><a class="lvl1" href="#paths">5 · Read &amp; write paths</a></li>
+    <li><a class="lvl2" href="#path-write">The write path</a></li>
+    <li><a class="lvl2" href="#path-exactly">Exactly-once writes</a></li>
+    <li><a class="lvl2" href="#path-read">Two read paths</a></li>
+
+    <li><a class="lvl1" href="#failure">6 · Failure handling</a></li>
+    <li><a class="lvl1" href="#chaos">7 · Chaos testing</a></li>
+    <li><a class="lvl2" href="#chaos-mech">Injection mechanisms</a></li>
+    <li><a class="lvl2" href="#chaos-dashboard">The control dashboard</a></li>
+    <li><a class="lvl2" href="#chaos-bugs">Two tests passing for the wrong reason</a></li>
+
+    <li><a class="lvl1" href="#results">8 · Empirical results</a></li>
+    <li><a class="lvl2" href="#res-suite">Test suite</a></li>
+    <li><a class="lvl2" href="#res-quorum">The quorum bypass</a></li>
+    <li><a class="lvl2" href="#res-durability">Durability</a></li>
+
+    <li><a class="lvl1" href="#limits">9 · Limitations</a></li>
+    <li><a class="lvl1" href="#glossary">Glossary</a></li>
+  </ul>
   <div class="toc-foot">
     <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage">↗ Repository</a>
     <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/tree/main/analysis">↗ Analysis &amp; data</a>
+    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md">↗ Known issues</a>
     <a href="https://raft.github.io/raft.pdf">↗ Raft paper</a>
   </div>
 </aside>
@@ -224,11 +293,10 @@
   <div class="eyebrow">Distributed Systems · CMPT 756</div>
   <h1>Fault-Tolerant Distributed Key-Value Store</h1>
   <p class="lede">
-    A CP key-value store built on the Raft consensus algorithm in Go — deployed on Google Cloud
-    Platform and verified under OS-level fault injection. Think of it as a small etcd: the same
-    class of system that backs Kubernetes' control plane. The consensus mathematics come from
-    HashiCorp Raft; everything that turns that library into a deployed, partition-tolerant
-    distributed service was built here — see <a href="#scope">what was built</a>.
+    A CP key-value store built on the Raft consensus algorithm in Go — deployed across Google Cloud
+    VMs and verified under OS-level fault injection. Think of it as a small etcd: the same class of
+    system that backs Kubernetes' control plane. The consensus mathematics come from HashiCorp Raft;
+    everything that turns that library into a deployed, partition-tolerant service was built here.
   </p>
   <div>
     <span class="pill">Go</span><span class="pill">HashiCorp Raft v1.7.3</span>
@@ -236,64 +304,144 @@
     <span class="pill">iptables / tc netem</span>
   </div>
   <div class="stats">
-    <div class="stat"><b>43/43</b><span>chaos tests passing</span></div>
-    <div class="stat"><b>~1.25 s</b><span>leader failover (MTTR)</span></div>
-    <div class="stat"><b>100%</b><span>key recovery after full crash</span></div>
-    <div class="stat"><b>3 &amp; 5</b><span>node GCP clusters verified</span></div>
+    <div class="stat"><b>42/42</b><span>chaos tests passing</span></div>
+    <div class="stat"><b>~1.2 s</b><span>observed leader failover</span></div>
+    <div class="stat"><b>100%</b><span>acknowledged writes recovered</span></div>
+    <div class="stat"><b>3 &amp; 5</b><span>node clusters deployed</span></div>
   </div>
 </header>
 
-<section id="overview">
-  <h2>Overview</h2>
+<section id="start">
+  <h2><span class="chnum">Orientation</span>Start here</h2>
+
   <p>
-    Distributed storage forces a choice when the network splits. This system chooses
-    <strong>consistency over availability</strong>: under a partition, the minority side stops
-    serving rather than return data it can no longer prove is current.
-  </p>
-  <p>
-    That choice is enforced mechanically, not by convention. Every read on the leader is preceded by
-    a <code>VerifyLeader()</code> heartbeat round-trip to a majority. A leader that has silently lost
-    contact with the cluster — and does not yet know it — fails that check and refuses to serve.
+    This page is the full technical account of the system, written to be read straight through.
+    Chapters 1–9 build up in order: the problem, the scope boundary, the architecture, how consensus
+    works, how reads and writes flow, what happens when things break, how that was tested, what was
+    measured, and what the results do not support.
   </p>
 
-  <div class="callout">
-    <p><strong>Why this matters.</strong> The dangerous failure in distributed storage is not a
-    crash; a crashed node obviously serves nothing. It is a node that is <em>confidently wrong</em> —
-    a deposed leader still answering reads with stale data because no one has told it that an
-    election happened. Preventing that is what most of the machinery below exists for.</p>
+  <div class="paths">
+    <div class="path">
+      <h4>New to distributed systems?</h4>
+      <p>Read top to bottom. Concepts are introduced where they first matter, and the
+      <a href="#glossary">glossary</a> collects every term.</p>
+    </div>
+    <div class="path">
+      <h4>Know Raft already?</h4>
+      <p>Use the sidebar. Likely destinations:
+      <a href="#scope-engineered">what was engineered</a>,
+      <a href="#res-quorum">the quorum bypass</a>,
+      <a href="#limits">limitations</a>.</p>
+    </div>
+    <div class="path">
+      <h4>Assessing the work?</h4>
+      <p><a href="#limits">Chapter 9</a> and the separate
+      <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md">known-issues
+      file</a> list every defect found, including in the docs themselves.</p>
+    </div>
   </div>
 
-  <h3>What was built</h3>
-  <table>
-    <thead><tr><th>Component</th><th>Role</th></tr></thead>
-    <tbody>
-      <tr><td><code>kv-store</code></td><td>Raft replica + gRPC server. One per VM.</td></tr>
-      <tr><td><code>node-agent</code></td><td>Supervisor + fault-injection sidecar. Spawns <code>kv-store</code> as a child process and injects faults at OS level.</td></tr>
-      <tr><td><code>kv-client</code></td><td>CLI with automatic leader discovery and redirect-follow.</td></tr>
-      <tr><td><code>kv-dashboard</code></td><td>Web UI for driving chaos scenarios and observing cluster health.</td></tr>
-      <tr><td><code>kv-chaos</code></td><td>TCP proxy for injecting delay and packet loss between nodes without stopping any process.</td></tr>
-    </tbody>
-  </table>
+  <div class="callout primer">
+    <span class="tag">The project in six sentences</span>
+    <p>
+      A key-value store is just a map — <code>set("foo","bar")</code>, <code>get("foo")</code> —
+      but running one copy is fragile, because if that machine dies the data is gone. So you run
+      several copies on different machines, which creates a new problem: keeping them in agreement
+      when machines crash and networks fail. <strong>Raft</strong> is the algorithm that solves
+      that: one node is elected leader, every change becomes an ordered entry in a replicated log,
+      and an entry only counts once a majority of nodes have stored it on disk. This system
+      implements that as five Go programs across a cluster of Google Cloud VMs, then attacks itself
+      — killing processes, freezing them, and severing the network with kernel firewall rules — to
+      check the guarantees actually hold. The headline result is that under a network split the
+      minority side <em>stops serving</em> rather than returning data it can no longer prove is
+      current, and a killed leader is replaced in roughly a second with no acknowledged write lost.
+    </p>
+  </div>
+
+  <div class="callout warn">
+    <span class="tag">On the numbers</span>
+    <p>
+      This is coursework, verified empirically rather than formally. Figures come from GCP runs in
+      early April 2026 and are honest, but the harness has real measurement limits — documented in
+      <a href="#limits">Chapter 9</a> and itemised in
+      <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md"><code>existing_issues.md</code></a>.
+      Where a number is an estimate rather than a measurement, this page says so.
+    </p>
+  </div>
 </section>
 
+<section id="problem">
+  <h2><span class="chnum">Chapter 1</span>The problem</h2>
+  <p class="chapter-lede">Why replicating data is easy and agreeing on it is hard.</p>
+
+  <h3 id="problem-split">When the network splits</h3>
+  <p>
+    Run one copy of a database and a single machine failure loses everything. The obvious fix is to
+    run several copies. But the moment there is more than one copy, they can disagree — and the
+    network is what makes them disagree, because a network can fail in a way that is far nastier
+    than a machine failing.
+  </p>
+  <p>
+    A crashed machine is honest: it serves nothing, and everyone can see it is gone. A
+    <strong>network partition</strong> is not. It severs the cluster into groups that can each still
+    talk internally, and each group cannot tell whether the others are dead or merely unreachable.
+    If both groups keep accepting writes, they diverge, and there is no correct way to merge the
+    result afterwards.
+  </p>
+
+  <div class="callout bad">
+    <span class="tag">The failure that actually matters</span>
+    <p>
+      The dangerous state in distributed storage is not a crash — it is a node that is
+      <strong>confidently wrong</strong>. A leader that has been deposed but has not yet learned it,
+      still answering reads with stale data as though nothing happened. Almost all of the machinery
+      in this system exists to make that state impossible.
+    </p>
+  </div>
+
+  <h3 id="problem-cp">Choosing consistency over availability</h3>
+  <p>
+    Faced with a partition, a system must give something up. It can keep answering everywhere and
+    risk returning stale or conflicting data (<strong>AP</strong>), or it can refuse to answer where
+    it cannot guarantee correctness (<strong>CP</strong>). This system chooses <strong>CP</strong>.
+  </p>
+  <p>
+    That choice is enforced mechanically rather than by convention. Every read served by the leader
+    is preceded by a <code>VerifyLeader()</code> call, which confirms with a majority of the cluster
+    that this node is still the leader before it answers. A leader that has silently lost contact
+    fails that check and refuses to serve — it returns an error instead of stale data.
+  </p>
+  <p class="muted"><small>
+    Writes do not need this check: a write is only acknowledged once a majority has durably stored
+    it, which already provides the guarantee. <code>VerifyLeader</code> exists because reads
+    otherwise touch only local state and would bypass the cluster entirely
+    (<code>server/node.go:225</code>).
+  </small></p>
+</section>
 
 <section id="scope">
-  <h2>What Was Built</h2>
-  <p>
-    Being precise about the boundary, because it is the first thing worth asking about any project
-    that says "Raft".
-  </p>
+  <h2><span class="chnum">Chapter 2</span>What was built</h2>
+  <p class="chapter-lede">Being precise about the boundary, because it is the first thing worth
+  asking about any project that says "Raft".</p>
 
-  <h3>What the libraries provide</h3>
+  <h3 id="scope-library">What the library provides</h3>
   <p>
-    The consensus <em>mathematics</em> were not reimplemented. <a href="https://github.com/hashicorp/raft">HashiCorp
-    Raft</a> supplies leader-election mechanics and randomized timers, quorum arithmetic
-    (<code>⌊N/2⌋+1</code>), inter-node heartbeats, and log truncation.
+    The consensus <em>mathematics</em> were not reimplemented.
+    <a href="https://github.com/hashicorp/raft">HashiCorp Raft</a> supplies leader-election
+    mechanics and randomized timers, quorum arithmetic (<code>⌊N/2⌋+1</code>), inter-node
+    heartbeats, log replication and truncation.
     <a href="https://github.com/etcd-io/bbolt">BoltDB</a> supplies the fsync guarantees that let the
-    log survive a sudden <code>SIGKILL</code>.
+    Raft log survive a sudden <code>SIGKILL</code>.
   </p>
+  <p class="muted"><small>
+    Precisely: BoltDB backs the <em>log store</em> and the <em>stable store</em>
+    (<code>server/node.go:89,94</code>). Snapshots use <code>raft.NewFileSnapshotStore</code>
+    (<code>server/node.go:83</code>), and the key-value map itself is in memory — its durability is
+    derivative, reconstructed from the log and snapshots on restart.
+  </small></p>
 
-  <h3>What was engineered on top</h3>
+  <h3 id="scope-engineered">What was engineered on top</h3>
   <p>
     Everything that turns a consensus library into a service running across physically separate
     machines under adversarial network conditions:
@@ -306,50 +454,65 @@
         <td>A follower receiving a client request must redirect it to the leader — but the leader's
         gRPC address is a dynamic GCP internal IP. Nodes therefore write their own
         <code>raftAddr → grpcAddr</code> mapping <em>into the Raft FSM itself</em>
-        (<code>fsm.Peers</code>), so the routing table is replicated and consistent by the same
-        mechanism as the data. Any follower can resolve the current leader's client address
-        without external coordination.</td>
+        (<code>fsm.Peers</code>, <code>server/fsm.go:26</code>), committed through the log like any
+        other entry. The routing table is replicated and made consistent by the same mechanism as
+        the data, so any follower can resolve the leader's client address with no external
+        coordination.</td>
+      </tr>
+      <tr>
+        <td><strong>Linearizable follower reads (Read-Index)</strong></td>
+        <td>A custom <code>GetReadIndex</code> RPC lets a follower serve a read locally without
+        giving up linearizability — see <a href="#path-read">Chapter 5</a>.</td>
       </tr>
       <tr>
         <td><strong>Dynamic deployment engine</strong></td>
-        <td>Provisions N GCP VMs, configures firewall rules, cross-compiles <code>linux/amd64</code>
-        binaries from macOS, distributes them over SCP with an SSH retry loop, and bootstraps a
-        quorum in under two minutes.</td>
+        <td>Provisions N GCP VMs, configures firewall rules, cross-compiles
+        <code>linux/amd64</code> binaries, waits for SSH to come up with a retry loop, then
+        distributes binaries over SCP and bootstraps a quorum.</td>
       </tr>
       <tr>
         <td><strong>Sidecar process supervision</strong></td>
         <td>The <code>node-agent</code> spawns <code>kv-store</code> as a <em>child process</em> and
-        exposes an HTTP API, so the dashboard can deliver <code>SIGSTOP</code>/<code>SIGCONT</code>/<code>SIGKILL</code>
-        to a remote process over the network — freezing a node without killing it, which a plain
-        crash test cannot simulate.</td>
+        exposes an HTTP API, so faults can be delivered to a remote process over the network —
+        including <code>SIGSTOP</code>, which freezes a node without killing it. A plain crash test
+        cannot simulate that.</td>
       </tr>
       <tr>
-        <td><strong>Real network partitions</strong></td>
-        <td>A TCP chaos proxy (<code>kv-chaos</code>) plus an iptables daemon, so partitions and
+        <td><strong>Kernel-level network faults</strong></td>
+        <td>An iptables and <code>tc netem</code> daemon inside the agent, so partitions and
         multi-second delays are injected <em>without</em> stopping the Raft process — verifying that
         election timers and client gRPC connections are genuinely decoupled.</td>
       </tr>
       <tr>
         <td><strong>Exactly-once semantics</strong></td>
-        <td>Per-client <code>(client_id, seq_num)</code> tracking inside the FSM, so a retry after a
-        dropped response cannot apply a write twice.</td>
+        <td>Per-client sequence tracking inside the FSM, so a retry after a dropped response cannot
+        apply a write twice — see <a href="#path-exactly">Chapter 5</a>.</td>
       </tr>
       <tr>
         <td><strong>Automated verification suite</strong></td>
-        <td>Seven phases of scripted assertions run against a live cluster, parsing health endpoints
-        and latency measurements rather than eyeballing logs.</td>
+        <td>Seven phases of scripted assertions run against a live cluster, parsing structured
+        health endpoints and timing operations programmatically rather than eyeballing logs.</td>
       </tr>
     </tbody>
   </table>
 
   <div class="callout">
-    <p><strong>The honest summary.</strong> Delegating the consensus proof to a battle-tested library
-    freed the engineering effort for the part that is actually hard in practice: getting a
+    <p><strong>The honest summary.</strong> Delegating the consensus proof to a battle-tested
+    library freed the engineering effort for the part that is actually hard in practice: getting a
     theoretical algorithm to survive real machines, real networks, and real failures.</p>
   </div>
 
-  <h3>Fault model</h3>
-  <p>The system is designed against, and only against, these assumptions:</p>
+  <p class="muted"><small>
+    A sixth binary, <code>kv-chaos</code>, is a userspace TCP proxy that was the project's original
+    fault-injection mechanism. It was <strong>superseded in v1.2</strong> by the sidecar agent,
+    because a proxy only affects connections routed through it, while <code>tc netem</code> affects
+    all traffic on the interface — including Raft heartbeats. The source remains in the repository;
+    none of the results below depend on it.
+  </small></p>
+
+  <h3 id="scope-fault">The fault model</h3>
+  <p>A system is only ever correct <em>with respect to a set of assumptions</em>. These are this
+  system's:</p>
   <ul>
     <li><strong>Crash-recovery</strong> — nodes may die at any moment, lose in-memory state, and rejoin later.</li>
     <li><strong>Unreliable network</strong> — messages may be dropped, delayed arbitrarily, or reordered.</li>
@@ -359,24 +522,46 @@
 </section>
 
 <section id="architecture">
-  <h2>System Architecture</h2>
+  <h2><span class="chnum">Chapter 3</span>Architecture</h2>
+  <p class="chapter-lede">Five programs, two ports per machine, and one deliberate separation.</p>
+
+  <table>
+    <thead><tr><th>Component</th><th>Role</th></tr></thead>
+    <tbody>
+      <tr><td><code>kv-store</code></td><td>Raft replica + gRPC server. One per VM.</td></tr>
+      <tr><td><code>node-agent</code></td><td>Supervisor and fault-injection sidecar. Spawns <code>kv-store</code> as a child process and injects faults at OS level.</td></tr>
+      <tr><td><code>kv-client</code></td><td>CLI with automatic leader discovery and redirect-follow.</td></tr>
+      <tr><td><code>kv-dashboard</code></td><td>Web UI for driving chaos scenarios and observing cluster health.</td></tr>
+      <tr><td><code>kv-chaos</code></td><td>Userspace TCP proxy. Superseded by the sidecar agent in v1.2; retained for reference.</td></tr>
+    </tbody>
+  </table>
+
+  <h3 id="arch-topology">Dual-port topology</h3>
   <p>
-    Each VM runs exactly two processes on separate ports. The separation is deliberate: consensus
-    traffic and client traffic must be independently disruptable, or fault injection cannot isolate
-    which layer a failure affects.
+    Each VM runs two processes on separate ports. The separation is deliberate: consensus traffic
+    and client traffic must be independently disruptable, or fault injection cannot isolate which
+    layer a failure affects.
   </p>
 
   <div class="diagram">
     <pre class="mermaid">
 flowchart TD
-    C["kv-client<br><small>leader auto-discovery</small>"]
-    D["kv-dashboard<br><small>chaos control</small>"]
+    C["`**kv-client**
+leader auto-discovery`"]
+    D["`**kv-dashboard**
+chaos control`"]
 
     subgraph CL["Raft cluster · GCP VMs"]
       direction LR
-      S1["<b>node0</b> — Leader<br>kv-store<br>Raft :12000 · gRPC :50051"]
-      S2["<b>node1</b> — Follower<br>kv-store<br>Raft :12001 · gRPC :50052"]
-      S3["<b>node2</b> — Follower<br>kv-store<br>Raft :12002 · gRPC :50053"]
+      S1["`**node0** — Leader
+kv-store
+Raft :12000 · gRPC :50051`"]
+      S2["`**node1** — Follower
+kv-store
+Raft :12001 · gRPC :50052`"]
+      S3["`**node2** — Follower
+kv-store
+Raft :12002 · gRPC :50053`"]
       S1 -- "AppendEntries / RequestVote" --> S2
       S1 -- "AppendEntries / RequestVote" --> S3
     end
@@ -394,42 +579,69 @@ flowchart TD
     A2 -.-> S2
     A3 -.-> S3
 
-    style S1 fill:#2a6f97,color:#fff,stroke:#1d4f6b
-    style S2 fill:__FOLLOW_FILL__,stroke:__FOLLOW_STROKE__,color:__FOLLOW_TEXT__
-    style S3 fill:__FOLLOW_FILL__,stroke:__FOLLOW_STROKE__,color:__FOLLOW_TEXT__
-    style A1 fill:#b8791f,color:#fff,stroke:#8a5a17
-    style A2 fill:#b8791f,color:#fff,stroke:#8a5a17
-    style A3 fill:#b8791f,color:#fff,stroke:#8a5a17
+    style S1 fill:#5b7f9e,color:#fff,stroke:#3f6180
+    style S2 fill:__NEUTRAL_FILL__,stroke:__NEUTRAL_STROKE__,color:__NEUTRAL_TEXT__
+    style S3 fill:__NEUTRAL_FILL__,stroke:__NEUTRAL_STROKE__,color:__NEUTRAL_TEXT__
+    style C fill:__NEUTRAL_FILL__,stroke:__NEUTRAL_STROKE__,color:__NEUTRAL_TEXT__
+    style D fill:__NEUTRAL_FILL__,stroke:__NEUTRAL_STROKE__,color:__NEUTRAL_TEXT__
+    style A1 fill:#a8813f,color:#fff,stroke:#83642f
+    style A2 fill:#a8813f,color:#fff,stroke:#83642f
+    style A3 fill:#a8813f,color:#fff,stroke:#83642f
     </pre>
-    <div class="caption">Dual-port topology. The sidecar attacks the node from outside the application, so the system under test cannot route around the fault.</div>
+    <div class="caption">The sidecar attacks the node from outside the application, using OS
+    primitives the system under test cannot intercept or route around.</div>
   </div>
 
-  <h3>Configuration</h3>
+  <h3 id="arch-config">Raft configuration</h3>
   <table>
     <thead><tr><th>Parameter</th><th>Value</th><th>Rationale</th></tr></thead>
     <tbody>
-      <tr><td><code>HeartbeatTimeout</code></td><td>500 ms</td><td>Follower declares the leader missing after this silence.</td></tr>
-      <tr><td><code>ElectionTimeout</code></td><td>750 ms</td><td>1.5× heartbeat — aggressive; see <a href="#limits">Limitations</a>.</td></tr>
+      <tr><td><code>HeartbeatTimeout</code></td><td>500 ms</td><td>Base interval after which a follower begins to suspect the leader is gone. Randomized upward by the library — see <a href="#cons-mttr">§4.4</a>.</td></tr>
+      <tr><td><code>ElectionTimeout</code></td><td>750 ms</td><td>Deadline for an election to complete before a candidate retries. 1.5× heartbeat — aggressive; see <a href="#limits">Limitations</a>.</td></tr>
+      <tr><td><code>LeaderLeaseTimeout</code></td><td>400 ms</td><td>How long a leader may act as leader without confirming it still holds a majority.</td></tr>
       <tr><td><code>CommitTimeout</code></td><td>100 ms</td><td>Maximum delay before batching a log entry out.</td></tr>
       <tr><td><code>SnapshotThreshold</code></td><td>10 entries</td><td>Deliberately low, to exercise <code>InstallSnapshot</code> frequently under test.</td></tr>
     </tbody>
   </table>
-  <p class="muted"><small>
-    Theoretical minimum MTTR = heartbeat + election = <strong>1250 ms</strong>. Observed MTTR matched
-    it almost exactly, because detection is deterministic: the election timer fires a fixed interval
-    after the last heartbeat, and in a quiet cluster the first follower to time out wins immediately.
-  </small></p>
+  <p class="muted"><small>All five set in <code>server/node.go:55-66</code>.</small></p>
+
+  <h3 id="arch-live">The running system</h3>
+  <p>
+    The dashboard renders live cluster state from each node's health endpoint — who leads, the
+    current term, the applied log index, and how many nodes are reachable — and is also the control
+    surface for injecting faults.
+  </p>
+  <figure>
+    <img src="assets/dashboard_healthy.png"
+         alt="Chaos dashboard showing a healthy three-node cluster: node0 as leader in gold, node1 and node2 as followers in blue, term 2, applied index 16, 3 of 3 nodes alive.">
+    <figcaption>A healthy 3-node cluster. <code>node0</code> holds leadership at term 2; all three
+    nodes have applied the same log index, which is what agreement looks like in practice.</figcaption>
+  </figure>
 </section>
 
 <section id="consensus">
-  <h2>Consensus Mechanics</h2>
+  <h2><span class="chnum">Chapter 4</span>Consensus mechanics</h2>
+  <p class="chapter-lede">How several machines come to agree on one ordering of events.</p>
+
+  <h3 id="cons-log">The replicated log</h3>
+  <div class="callout primer">
+    <span class="tag">Primer</span>
+    <p>
+      Raft does not replicate the <em>data</em> directly — it replicates an ordered <strong>log</strong>
+      of changes. Every state change (<code>set foo=bar</code>, <code>delete baz</code>) becomes a
+      numbered entry. A node may apply an entry to its own copy of the data only once a majority of
+      nodes have durably stored it. Because every node applies the same entries in the same order,
+      every node ends up in the same state. Agreement on <em>log order</em> yields agreement on
+      <em>state</em> — that is the whole idea.
+    </p>
+  </div>
+
+  <h3 id="cons-election">Leader election</h3>
   <p>
-    Raft replicates a log. Every state change becomes an ordered entry, and a node may apply an entry
-    to its state machine only once a majority has durably stored it. Agreement on <em>log order</em>
-    yields agreement on <em>state</em>.
+    All writes go through a single leader, which is what makes ordering easy. When the leader dies,
+    the survivors must pick a new one without ever picking two.
   </p>
 
-  <h3>Leader election</h3>
   <div class="diagram">
     <pre class="mermaid">
 sequenceDiagram
@@ -442,31 +654,45 @@ sequenceDiagram
     L->>F2: AppendEntries (heartbeat)
     Note over L: crash / partition
     Note over F1,F2: silence...
-    Note over F1: 500 ms heartbeat timeout
-    Note over F1: +750 ms election timeout fires
+    Note over F1: heartbeat timer expires<br/>(randomized, 500-1000 ms)
     F1->>F1: term++, vote for self
     F1->>F2: RequestVote (term N+1)
     F2-->>F1: vote granted
     Note over F1: 2 of 3 = majority
     F1->>F2: AppendEntries (new leader)
-    Note over F1,F2: ~1.25 s total
     </pre>
-    <div class="caption">A candidate needs ⌊N/2⌋+1 votes — 2 of 3, or 3 of 5. Requiring a strict majority is what makes two simultaneous leaders impossible.</div>
+    <div class="caption">A candidate needs ⌊N/2⌋+1 votes — 2 of 3, or 3 of 5. On a quiet cluster
+    the vote itself completes in about one network round-trip; nearly all of the failover time is
+    spent waiting for the heartbeat timer to expire.</div>
   </div>
 
-  <figure>
-    <img src="assets/availability_mttr.png"
-         alt="Availability timeline showing writes blocked for 1.25 s during leader failover, split into a 500 ms heartbeat timeout and a 750 ms election window">
-    <figcaption>Measured failover on GCP. The outage decomposes exactly into the two configured timeouts — 500 ms to detect silence, 750 ms to elect — which is why observed MTTR matches the theoretical minimum.</figcaption>
-  </figure>
+  <p>Here is that sequence captured live — the leader killed, and the cluster after it recovered:</p>
 
-  <div class="callout">
-    <p><strong>Why a majority, specifically?</strong> Any two majorities of the same cluster must
-    share at least one member. That overlapping node cannot vote for two different leaders in the
-    same term — so split-brain is excluded arithmetically rather than by timing luck.</p>
+  <div class="shots">
+    <figure>
+      <img src="assets/dashboard_healthy.png" alt="Before: node0 is leader at term 2, three of three nodes alive.">
+      <figcaption><strong>Before.</strong> <code>node0</code> leads at term 2, 3/3 alive.</figcaption>
+    </figure>
+    <figure>
+      <img src="assets/dashboard_failover.png" alt="After: node0 marked dead in red, node1 promoted to leader in gold, term incremented to 3, two of three nodes alive.">
+      <figcaption><strong>After.</strong> <code>node0</code> killed; <code>node1</code> elected at
+      term <strong>3</strong>, 2/3 alive. Service continues.</figcaption>
+    </figure>
   </div>
+  <p class="muted"><small>
+    The term increments on every election. It is Raft's logical clock, and it is how a node that
+    rejoins late discovers its information is stale.
+  </small></p>
 
-  <h3>Cluster size and fault tolerance</h3>
+  <h3 id="cons-quorum">Why a majority, specifically</h3>
+  <div class="callout check">
+    <p>
+      Any two majorities of the same cluster must share at least one member. That overlapping node
+      cannot vote for two different leaders in the same term — so two simultaneous leaders are
+      excluded <strong>arithmetically</strong>, not by timing luck. This is the single idea that
+      makes the whole algorithm safe.
+    </p>
+  </div>
   <table>
     <thead><tr><th>Nodes</th><th>Quorum</th><th>Failures survived</th></tr></thead>
     <tbody>
@@ -474,13 +700,58 @@ sequenceDiagram
       <tr><td>5</td><td>3</td><td>2</td></tr>
     </tbody>
   </table>
-  <p class="muted"><small>Both configurations were deployed and verified. Even node counts are avoided — 4 nodes tolerate the same single failure as 3, while adding a replica's coordination cost.</small></p>
+  <p class="muted"><small>
+    Even node counts are avoided: 4 nodes tolerate the same single failure as 3, while adding a
+    replica's coordination cost. Both 3-node and 5-node clusters were deployed;
+    <code>dynamic_deploy.sh</code> parameterises node count, though raw artifacts from the 5-node
+    run are not committed to the repository.
+  </small></p>
+
+  <h3 id="cons-mttr">How long failover takes</h3>
+  <p>
+    Failover time is <strong>a distribution, not a constant</strong>, and the reason is deliberate.
+    HashiCorp Raft randomizes its timers to prevent split votes — if every follower timed out at
+    exactly the same moment, they would all become candidates simultaneously, split the vote, and
+    have to retry.
+  </p>
+  <p>
+    In <code>hashicorp/raft@v1.7.3</code>, <code>randomTimeout</code> "returns a value that is
+    between the minVal and 2x minVal" (<code>util.go:33</code>). So with the configuration above:
+  </p>
+  <table>
+    <thead><tr><th>Phase</th><th>Actual interval</th><th>Source</th></tr></thead>
+    <tbody>
+      <tr><td>Detecting the leader is gone</td><td>uniform in <strong>[500 ms, 1000 ms)</strong></td><td><code>raft.go:163</code></td></tr>
+      <tr><td>Election deadline before retry</td><td>uniform in <strong>[750 ms, 1500 ms)</strong></td><td><code>raft.go:310</code></td></tr>
+      <tr><td>The vote itself, on a quiet cluster</td><td>≈ one round-trip</td><td>—</td></tr>
+    </tbody>
+  </table>
+  <div class="callout warn">
+    <span class="tag">A correction to an earlier version of this page</span>
+    <p>
+      This page previously stated a "theoretical minimum MTTR of 1250 ms" derived as
+      <code>heartbeat + election = 500 + 750</code>, and described detection as deterministic. Both
+      were wrong. Detection is randomized, not fixed; and <code>ElectionTimeout</code> is the
+      <em>deadline</em> for an election, not its duration — adding it models something that does not
+      happen. A local reproduction across 7 leader kills measured
+      <strong>777, 817, 1007, 1127, 1137, 1211 and 1997 ms</strong> — five of them below the
+      supposed "minimum", with a 2.6× spread. That spread is the randomization, visible.
+    </p>
+  </div>
+  <figure>
+    <img src="assets/availability_mttr.png"
+         alt="Availability timeline showing writes blocked for approximately 1.25 seconds during leader failover, decomposed into a heartbeat-detection window and an election window">
+    <figcaption>Failover on GCP: writes block for roughly a second while the cluster has no leader,
+    then resume. The GCP harness times this with whole-second granularity, so treat ~1.2 s as an
+    order-of-magnitude result rather than a precise one.</figcaption>
+  </figure>
 </section>
 
 <section id="paths">
-  <h2>Read &amp; Write Paths</h2>
+  <h2><span class="chnum">Chapter 5</span>Read &amp; write paths</h2>
+  <p class="chapter-lede">What actually happens when a client calls set or get.</p>
 
-  <h3>Write path</h3>
+  <h3 id="path-write">The write path</h3>
   <div class="diagram">
     <pre class="mermaid">
 sequenceDiagram
@@ -489,34 +760,50 @@ sequenceDiagram
     participant F as Follower
     participant L as Leader
     participant P as Peers
-    participant M as FSM + BoltDB
+    participant M as FSM
 
     C->>F: Set(foo=bar)
     F-->>C: redirect → leader address
     C->>L: Set(foo=bar, clientID, seqNum)
     L->>L: append {SET, foo, bar, clientID, seqNum}
     L->>P: AppendEntries
-    P-->>L: ACK
-    Note over L: quorum reached
+    P-->>L: ACK (entry fsync'd to BoltDB log)
+    Note over L: quorum reached → entry committed
     L->>M: FSM.Apply()
     M->>M: dedup check (clientID, seqNum)
-    M->>M: write to BoltDB
-    M->>M: lastSeq[clientID] = seqNum
+    M->>M: apply to in-memory state
+    M->>M: record (clientID → seqNum)
     L-->>C: success
     </pre>
-    <div class="caption">The response is returned only after the entry is durable and committed by a majority. Acknowledged writes survive a leader crash.</div>
+    <div class="caption">The response is returned only after the entry is durable on a majority and
+    committed. Acknowledged writes survive a leader crash.</div>
   </div>
+  <p class="muted"><small>
+    Note where durability lives: the <em>log entry</em> is fsync'd to BoltDB by the Raft library
+    before <code>Apply</code> is ever called. <code>FSM.Apply</code> itself only mutates an
+    in-memory map (<code>server/fsm.go:170</code>). The key-value data has no separate disk store —
+    it is rebuilt from the log and snapshots on restart.
+  </small></p>
 
+  <h3 id="path-exactly">Exactly-once writes</h3>
+  <p>
+    A client whose connection drops mid-write does not know whether the write landed. If it retries
+    and the original had in fact committed, a naive system applies it twice.
+  </p>
   <div class="callout">
-    <p><strong>Exactly-once writes.</strong> A client that retries after a leader change would
-    otherwise apply the same operation twice. The FSM keeps a per-client
-    <code>(client_id → last_seq)</code> table, so a duplicate is recognised and skipped. Because the
-    table lives <em>inside</em> the state machine, it is replicated and snapshotted with the data —
-    surviving leader changes and node restarts alike.</p>
+    <p>
+      Each request carries a <code>(client_id, seq_num)</code> pair, and the FSM keeps a per-client
+      record of the last sequence number it applied
+      (<code>lastApplied map[string]*clientEntry</code>, <code>server/fsm.go:27</code> — the entry
+      also carries a last-seen timestamp so idle clients can be evicted). A replay is recognised and
+      skipped. Because this table lives <em>inside</em> the state machine, it is replicated through
+      the log and included in snapshots (<code>fsm.go:209-216, 243-248, 271-289</code>) — so it
+      survives leader changes and node restarts alike.
+    </p>
   </div>
 
-  <h3>Read paths</h3>
-  <p>Two mechanisms, both linearizable, trading latency against leader load.</p>
+  <h3 id="path-read">Two read paths</h3>
+  <p>Both linearizable, trading latency against leader load.</p>
   <div class="diagram">
     <pre class="mermaid">
 sequenceDiagram
@@ -526,7 +813,7 @@ sequenceDiagram
     participant F as Follower
     participant P as Peers
 
-    rect rgba(42,111,151,.10)
+    rect rgba(91,127,158,.10)
     Note over C,P: Leader read — VerifyLeader
     C->>L: Get(foo)
     L->>P: heartbeat to majority
@@ -534,35 +821,45 @@ sequenceDiagram
     L-->>C: value
     end
 
-    rect rgba(184,121,31,.10)
+    rect rgba(168,129,63,.10)
     Note over C,P: Follower read — Read-Index (v1.3)
     C->>F: Get(foo, follower_read=true)
     F->>L: GetReadIndex()
     L->>P: confirm leadership
     L-->>F: commit_index = N
-    F->>F: block until appliedIndex ≥ N
+    F->>F: block until appliedIndex >= N
     F-->>C: value (served locally)
     end
     </pre>
-    <div class="caption">Read-Index lets followers serve linearizable reads: they learn how current they must be, wait to reach that point, then answer from local state.</div>
+    <div class="caption">Read-Index lets followers serve linearizable reads: they learn how current
+    they must be, wait to reach that point, then answer from local state.</div>
   </div>
+  <p>
+    <strong>Why the follower path is worth the complexity.</strong> A leader read costs the leader a
+    round-trip to a majority on <em>every</em> read, so a read-heavy workload saturates the leader.
+    Read-Index moves the serving work to followers while preserving the guarantee: the follower asks
+    the leader only for a commit index — one small RPC — then waits until its own applied index
+    reaches it. It never returns data older than the moment the read began.
+  </p>
   <p class="muted"><small>
-    <code>VerifyLeader()</code> costs one round-trip (~30 ms cross-zone on GCP) on every read. That
-    is the price of never serving stale data from a deposed leader.
+    Implemented in <code>server/node.go:241-272</code> (follower side) and <code>:415-430</code>
+    (leader side). <code>VerifyLeader()</code> costs one cross-zone round-trip on GCP — estimated at
+    roughly 15 ms, though note that no RTT measurement is committed to the repository.
   </small></p>
 </section>
 
 <section id="failure">
-  <h2>Failure Handling</h2>
-  <p>What the implementation actually does — not textbook Raft, but the behaviour observed under test.</p>
+  <h2><span class="chnum">Chapter 6</span>Failure handling</h2>
+  <p class="chapter-lede">What the implementation actually does — the behaviour observed under
+  test, not textbook Raft.</p>
 
   <div class="diagram">
     <pre class="mermaid">
 stateDiagram-v2
     [*] --> Healthy
     Healthy --> LeaderLost: leader killed / partitioned
-    LeaderLost --> Electing: heartbeat + election timeout
-    Electing --> Healthy: majority elects new leader (~1.25 s)
+    LeaderLost --> Electing: heartbeat timer expires
+    Electing --> Healthy: majority elects new leader
     Electing --> Unavailable: no majority reachable
 
     Healthy --> Partitioned: network split
@@ -575,100 +872,138 @@ stateDiagram-v2
     CatchUp --> Healthy: AppendEntries or InstallSnapshot
     Unavailable --> Healthy: quorum restored
     </pre>
-    <div class="caption">The minority side of a partition blocks rather than diverging — this is the CP guarantee made concrete.</div>
+    <div class="caption">The minority side of a partition blocks rather than diverging — this is
+    the CP guarantee made concrete.</div>
   </div>
-
-  <figure>
-    <img src="assets/durability_proof.png"
-         alt="Bar chart showing acknowledged writes versus recovered keys across three crash models, all at 100 percent recovery">
-    <figcaption>Durability across three crash models. D2 recovers 7/7 <em>acknowledged</em> writes — unacknowledged writes are correctly absent rather than partially applied.</figcaption>
-  </figure>
 
   <table>
     <thead><tr><th>Failure</th><th>Response</th><th>Verified by</th></tr></thead>
     <tbody>
-      <tr><td>Leader SIGKILL</td><td>Election completes in ~1.25 s; acknowledged writes preserved</td><td>P1 · L1</td></tr>
+      <tr><td>Leader <code>SIGKILL</code></td><td>Election completes in about a second; acknowledged writes preserved</td><td>P1 · L1</td></tr>
       <tr><td>Leader partitioned (iptables)</td><td>Isolated leader fails <code>VerifyLeader</code>, refuses reads and writes; majority elects a successor</td><td>P6 · N6a–N6c</td></tr>
       <tr><td>Minority partition</td><td>Blocks all operations rather than serving stale data</td><td>P2 · P2a, P2c</td></tr>
       <tr><td>Full cluster wipe</td><td>All 10/10 keys recovered from the persisted log on restart</td><td>P4 · D1</td></tr>
       <tr><td>Crash mid-write-burst</td><td>100% of <em>acknowledged</em> writes recovered; unacknowledged writes correctly absent</td><td>P4 · D2</td></tr>
       <tr><td>Replica 30 entries behind</td><td><code>InstallSnapshot</code> teleports full state; 30/30 keys recovered</td><td>P4 · D3</td></tr>
       <tr><td>Duplicate write after failover</td><td>Dedup table drops it; value never applied twice</td><td>P5 · I2, I3</td></tr>
+      <tr><td>Process frozen (<code>SIGSTOP</code>)</td><td>Treated as unreachable; cluster elects around it and it rejoins on <code>SIGCONT</code></td><td>P6</td></tr>
     </tbody>
   </table>
 </section>
 
 <section id="chaos">
-  <h2>Chaos-Testing Infrastructure</h2>
-  <p>
-    Faults are injected by a sidecar that operates below the application — using OS primitives the
-    system under test cannot intercept or route around.
-  </p>
+  <h2><span class="chnum">Chapter 7</span>Chaos testing</h2>
+  <p class="chapter-lede">Breaking the system on purpose, from below the application, where it
+  cannot defend itself.</p>
 
+  <h3 id="chaos-mech">Injection mechanisms</h3>
+  <p>
+    Every fault is delivered by the sidecar agent using OS primitives. This matters: a fault
+    injected <em>inside</em> the application could be caught, retried, or routed around by the
+    application itself, which would make the test meaningless.
+  </p>
   <table>
     <thead><tr><th>Fault</th><th>Mechanism</th></tr></thead>
     <tbody>
-      <tr><td>Process kill</td><td><code>kill -9 &lt;pid&gt;</code></td></tr>
-      <tr><td>Freeze / thaw</td><td><code>kill -STOP</code> / <code>-CONT</code> — simulates a GC pause or a hung process</td></tr>
-      <tr><td>Network partition</td><td><strong>Bidirectional</strong> <code>iptables -A INPUT/OUTPUT … -j DROP</code></td></tr>
-      <tr><td>Latency injection</td><td><code>tc qdisc add dev &lt;nic&gt; root netem delay Xms</code>, applied to the full NIC</td></tr>
+      <tr><td>Process kill</td><td><code>SIGKILL</code> — uncatchable by design</td></tr>
+      <tr><td>Freeze / thaw</td><td><code>SIGSTOP</code> / <code>SIGCONT</code> — simulates a GC pause or a hung process</td></tr>
+      <tr><td>Network partition</td><td><strong>Bidirectional</strong> <code>iptables -I INPUT/OUTPUT -p tcp --dport … -j DROP</code></td></tr>
+      <tr><td>Latency injection</td><td><code>tc qdisc add dev &lt;nic&gt; root netem delay Xms</code>, applied to the whole NIC</td></tr>
       <tr><td>NIC discovery</td><td><code>ip route get 8.8.8.8</code> — GCP Debian uses <code>ens4</code>, not <code>eth0</code></td></tr>
     </tbody>
   </table>
+  <p class="muted"><small>All in <code>cmd/agent/main.go</code> (<code>:86, 159, 180, 201, 254, 261, 324</code>).</small></p>
 
+  <h3 id="chaos-dashboard">The control dashboard</h3>
+  <p>
+    <code>kv-dashboard</code> drives all of it from a browser: pick a node, kill it, freeze it,
+    partition it, add latency — and watch the cluster's reaction in the topology view and event log
+    as it happens. It also runs the cluster locally, which makes the whole system reproducible on
+    one machine without any cloud account.
+  </p>
+  <figure>
+    <img src="assets/dashboard_failover.png"
+         alt="Chaos dashboard immediately after killing the leader: node0 shown dead in red, node1 promoted to leader, term 3, 2 of 3 nodes alive, and the event log recording the kill.">
+    <figcaption>Immediately after <code>SIGKILL</code> on the leader. The event log records the
+    injected fault; the topology shows <code>node1</code> promoted and the term advanced to 3. The
+    cluster is still serving on 2 of 3 nodes — exactly one failure is what a 3-node quorum
+    tolerates.</figcaption>
+  </figure>
+  <div class="callout">
+    <p><strong>What runs where.</strong> Leader election, replication, follower reads, and the
+    kill / freeze / restart faults are all signal-based and reproduce locally on a single machine.
+    The <strong>network</strong> faults — iptables partitions and <code>tc netem</code> delay — are
+    Linux kernel features and require the GCP deployment; <code>local_deploy.sh</code> does not
+    build or start the sidecar agent.</p>
+  </div>
+
+  <h3 id="chaos-bugs">Two tests that were passing for the wrong reason</h3>
   <div class="callout warn">
-    <p><strong>Two bugs where the tests were silently passing for the wrong reason.</strong> Both were
-    found by checking whether the fault injector was doing what it claimed — not by a failing test.</p>
+    <p>
+      Both were found by checking whether the fault injector was doing what it claimed — not by a
+      failing test. This is the most transferable lesson in the project.
+    </p>
     <p><strong>BUG-4 — unidirectional partition.</strong> The first implementation dropped only
-    <code>INPUT</code>. The "isolated" node could still send heartbeats <em>outward</em>, so peers
-    never considered it gone. Every partition test had been validating a partition that did not
-    exist. Fixed by dropping <code>INPUT</code> and <code>OUTPUT</code>.</p>
-    <p><strong>BUG-5 — netem on the wrong scope.</strong> Latency was applied to <code>eth0</code>
-    (absent on GCP) and scoped to the Raft port only — so heartbeats on other ports still arrived on
-    time and no election was triggered. Fixed by auto-detecting the NIC and delaying all traffic on
-    it.</p>
-    <p>A passing chaos test proves nothing until you have verified the chaos.</p>
+    <code>INPUT</code>. The "isolated" node could still send heartbeats <em>outward</em>, so its
+    peers never considered it gone. Every partition test had been validating a partition that did
+    not exist. Fixed by dropping <code>INPUT</code> and <code>OUTPUT</code>.</p>
+    <p><strong>BUG-5 — netem on the wrong scope.</strong> Latency was applied through a
+    <code>tc filter u32 match ip dport 12001</code> rule, scoping it to the Raft port alone — while
+    <code>kv-client</code> talks on the gRPC ports, which were unaffected. The slow-follower test
+    therefore measured no client-visible delay at all. Fixed by applying netem to the entire NIC.
+    A related discovery during the fix: GCP's Debian images name the interface <code>ens4</code>,
+    not <code>eth0</code>, so the NIC is now auto-detected.</p>
+    <p><strong>A passing chaos test proves nothing until you have verified the chaos.</strong></p>
   </div>
 </section>
 
 <section id="results">
-  <h2>Empirical Results</h2>
+  <h2><span class="chnum">Chapter 8</span>Empirical results</h2>
 
   <div class="callout">
-    <p><strong>Reproducible.</strong> Every figure below is regenerated by
-    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/analysis/generate_graphs.py"><code>analysis/generate_graphs.py</code></a>,
-    and the full per-phase write-up — including the raw numbers from all three GCP runs — is in
-    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/analysis/results_analysis.md"><code>analysis/results_analysis.md</code></a>
-    and the <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/analysis/analysis_notebook.ipynb">analysis notebook</a>.
-    Figures visualise measurements taken during the runs; they do not generate them.</p>
+    <p><strong>Provenance.</strong> Figures are regenerated by
+    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/analysis/generate_graphs.py"><code>analysis/generate_graphs.py</code></a>
+    and the per-phase write-up is in
+    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/analysis/results_analysis.md"><code>analysis/results_analysis.md</code></a>.
+    Headline numbers come from the <strong>final GCP run of 4 April 2026</strong> (3-node, v1.3) —
+    not averaged across runs. An earlier run measured 82% throughput retention for the slow-follower
+    case against 97% in this one, so treat single figures as representative rather than tight.</p>
   </div>
 
-  <h3>Test suite</h3>
-  <p><span class="pass">43/43 passing</span> — 37 across six GCP phases, plus 6 for follower reads. Separately, 21 Go unit tests cover the FSM.</p>
+  <h3 id="res-suite">Test suite</h3>
+  <p><span class="pass">42/42 passing</span> — 37 across six GCP fault-injection phases, plus 5 for
+  follower reads in Phase 7. Separately, 21 Go unit tests cover the FSM
+  (<code>server/fsm_test.go</code>).</p>
   <table>
-    <thead><tr><th>Phase</th><th>Focus</th><th>Tests</th></tr></thead>
+    <thead><tr><th>Phase</th><th>Focus</th><th>Example tests</th></tr></thead>
     <tbody>
-      <tr><td>P1</td><td>Liveness — failover, MTTR</td><td>L1, L1c, L3b</td></tr>
+      <tr><td>P1</td><td>Liveness — failover, recovery time</td><td>L1, L1c, L3b</td></tr>
       <tr><td>P2</td><td>Partitions — CP safety</td><td>P2a, P2c</td></tr>
       <tr><td>P3</td><td>Latency — throughput under delay</td><td>R1, R2</td></tr>
       <tr><td>P4</td><td>Durability — wipe, dirty crash, snapshot</td><td>D1, D2, D3</td></tr>
       <tr><td>P5</td><td>Idempotency across failover</td><td>I2, I3</td></tr>
       <tr><td>P6</td><td>Kernel chaos — iptables, netem</td><td>N6a–N6f</td></tr>
-      <tr><td>P7</td><td>Follower Read-Index linearizability</td><td>T1–T6</td></tr>
+      <tr><td>P7</td><td>Follower Read-Index linearizability</td><td>T1–T5</td></tr>
     </tbody>
   </table>
+  <p class="muted"><small>
+    Test IDs shown are representative, not exhaustive. Phase 6's denominator is not fully fixed —
+    several checks report success without a matching failure branch, so they can drop out of the
+    count rather than fail. See
+    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md#33-phase-6s-test-count-varies-by-run"><code>existing_issues.md</code> §3.3</a>.
+  </small></p>
 
-  <h3>The quorum bypass</h3>
+  <h3 id="res-quorum">The quorum bypass</h3>
   <p>
-    The clearest empirical result: <strong>where</strong> latency lands matters far more than how much
-    there is.
+    The clearest result in the project: <strong>where</strong> latency lands matters far more than
+    how much of it there is.
   </p>
   <figure>
     <img src="assets/latency_quorum_proof.png"
-         alt="Bar chart of write throughput: baseline 62.9 ops per second, slow follower 61.3, slow leader 0.6">
-    <figcaption>Quorum bypass measured directly: a follower delayed 2000 ms is almost free; a leader delayed 500 ms is catastrophic.</figcaption>
+         alt="Bar chart of write throughput: baseline 62.9 operations per second, slow follower 61.3, slow leader 0.6">
+    <figcaption>A follower delayed by 2000 ms is almost free; a leader delayed by 500 ms is
+    catastrophic.</figcaption>
   </figure>
-
   <table>
     <thead><tr><th>Condition</th><th>Latency</th><th>Throughput</th><th>vs baseline</th></tr></thead>
     <tbody>
@@ -677,41 +1012,50 @@ stateDiagram-v2
       <tr><td>Slow <em>leader</em> (+500 ms)</td><td>1645 ms/op</td><td>0.6 ops/s</td><td class="fail">−99%</td></tr>
     </tbody>
   </table>
-  <p>
-    A follower delayed by two full seconds costs 2.5% throughput. The leader delayed by a quarter of
-    that destroys 99% of it.
-  </p>
-  <div class="callout">
+  <div class="callout check">
     <p><strong>Why.</strong> In a 3-node cluster the leader commits once it has its own write plus
-    <em>any one</em> follower — so the slowest node is simply never on the critical path. Quorum
-    means a lagging minority cannot serialize the majority. The leader, by contrast, is on every
-    write path by definition; delaying it delays everything, and at 500 ms its own heartbeats miss
-    their deadline and trigger an election.</p>
+    <em>any one</em> follower — so the slowest node is never on the critical path. Quorum means a
+    lagging minority cannot serialize the majority. The leader, by contrast, is on every write path
+    by definition; delaying it delays everything. At 500 ms its own heartbeats also miss their
+    deadline, which triggers an election — correct behaviour, and part of why the measured cost is
+    so severe.</p>
   </div>
 
-  <h3>Recovery and failover</h3>
+  <h3 id="res-durability">Durability and recovery</h3>
+  <figure>
+    <img src="assets/durability_proof.png"
+         alt="Bar chart showing acknowledged writes versus recovered keys across three crash models, all at 100 percent recovery">
+    <figcaption>Across three crash models, every acknowledged write was recovered. In D2, writes
+    that were never acknowledged are correctly <em>absent</em> rather than partially applied.</figcaption>
+  </figure>
   <table>
-    <thead><tr><th>Metric</th><th>Result</th></tr></thead>
+    <thead><tr><th>Scenario</th><th>Result</th></tr></thead>
     <tbody>
-      <tr><td>MTTR — SIGKILL</td><td>~1250 ms (matches theoretical minimum)</td></tr>
-      <tr><td>MTTR — iptables partition</td><td>~1250 ms</td></tr>
+      <tr><td>Leader failover (SIGKILL and iptables)</td><td>~1.2 s observed, whole-second harness granularity</td></tr>
       <tr><td>Full cluster wipe</td><td>10/10 keys — <span class="pass">100%</span></td></tr>
-      <tr><td>Crash mid-burst</td><td><span class="pass">100%</span> of acknowledged writes</td></tr>
+      <tr><td>Crash mid-burst</td><td><span class="pass">100%</span> of acknowledged writes recovered</td></tr>
       <tr><td>Snapshot catch-up</td><td>30/30 keys — <span class="pass">100%</span></td></tr>
     </tbody>
   </table>
+  <p class="muted"><small>
+    The crash-mid-burst count varies with timing (typically 5–10 writes acknowledged before the
+    kill); the meaningful figure is the ratio, which was 100% every run.
+  </small></p>
 </section>
 
 <section id="limits">
-  <h2>Limitations</h2>
-  <p>Stated plainly, because they bound what the numbers above mean.</p>
+  <h2><span class="chnum">Chapter 9</span>Limitations</h2>
+  <p class="chapter-lede">Stated plainly, because they bound what everything above means.</p>
 
   <table>
     <thead><tr><th>Limitation</th><th>Detail</th></tr></thead>
     <tbody>
       <tr><td><strong>No linearizability checker</strong></td><td>Correctness is validated by hand-designed scenarios, not by recording operation histories and checking them mechanically (Jepsen/Porcupine). This is the clearest gap and the highest-value addition.</td></tr>
+      <tr><td><strong>Failover timing is coarse</strong></td><td>The GCP harness times elections with bash's <code>$SECONDS</code>, which is whole-second granularity — so it cannot support a figure quoted to three significant figures. Millisecond timing across many trials, reported as a distribution, is the correct fix.</td></tr>
+      <tr><td><strong>Throughput figures are not reproducible from data</strong></td><td>The six latency/throughput numbers exist only as constants in the plotting script; no raw timing log is committed. They are internally consistent and the relative result is robust, but the measurements themselves cannot be re-derived.</td></tr>
+      <tr><td><strong>Single-run headline numbers</strong></td><td>Figures are from one GCP run, not aggregated. Run-to-run variance was material where it was measured.</td></tr>
       <tr><td><strong>No pre-vote</strong></td><td>A partitioned node that rejoins with an inflated term can disrupt a stable leader. A known Raft extension, not implemented here.</td></tr>
-      <tr><td><strong>Aggressive election timeout</strong></td><td>1.5× heartbeat, below HashiCorp's recommended 5–10×. Empirically stable in these conditions, with one observed spurious election under heavy load. Tuned for a ~15 ms cross-zone RTT — not validated at scale or under adversarial load.</td></tr>
+      <tr><td><strong>Aggressive election timeout</strong></td><td>1.5× heartbeat, below HashiCorp's recommended 5–10×. Empirically stable in these conditions. One election did occur during Phase 3's R2b — but that was under a deliberately injected 500 ms delay on the leader's NIC, and electing a new leader was the correct response, not a flake.</td></tr>
       <tr><td><strong>Modest absolute throughput</strong></td><td>~63 ops/s on <code>e2-micro</code> instances, with no batching or pipelining of <code>AppendEntries</code>. The interesting result is the <em>relative</em> behaviour, not the raw number.</td></tr>
       <tr><td><strong>No metrics endpoint</strong></td><td>Cluster state is observable via logs and the dashboard, but there is no Prometheus surface for term, commit index, or replication lag.</td></tr>
       <tr><td><strong>Empirically verified, not formally</strong></td><td>No TLA+ specification or proof. Confidence rests on the test suite and the design, not on formal methods.</td></tr>
@@ -720,23 +1064,110 @@ stateDiagram-v2
   </table>
 
   <div class="callout">
-    <p><strong>If continued, in order:</strong> (1) record operation histories and run them through
-    <a href="https://github.com/anishathalye/porcupine">Porcupine</a> for mechanical linearizability
-    checking; (2) add pre-vote; (3) expose Prometheus metrics; (4) batch and pipeline
-    <code>AppendEntries</code> for throughput.</p>
+    <p><strong>A full defect list</strong> — including errors found in this documentation itself,
+    contradictions between the project's own documents, and the measurement gaps above — is
+    maintained separately in
+    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md"><code>existing_issues.md</code></a>.</p>
+    <p><strong>If continued, in order:</strong> (1) re-measure failover with millisecond timing over
+    many trials and report a distribution; (2) record operation histories and run them through
+    <a href="https://github.com/anishathalye/porcupine">Porcupine</a>; (3) add pre-vote; (4) expose
+    Prometheus metrics; (5) batch and pipeline <code>AppendEntries</code>.</p>
   </div>
+</section>
+
+<section id="glossary">
+  <h2><span class="chnum">Reference</span>Glossary</h2>
+  <p class="chapter-lede">Every term used above, in one place.</p>
+
+  <dl class="glossary">
+    <dt>Consensus</dt>
+    <dd>Getting several machines to agree on one value or one ordering, despite crashes and an unreliable network.</dd>
+
+    <dt>Raft</dt>
+    <dd>A consensus algorithm designed to be understandable. One elected leader, an ordered replicated log, and majority agreement.</dd>
+
+    <dt>CP / AP (CAP)</dt>
+    <dd>Under a network partition a system can favour consistency (CP — refuse to answer where correctness cannot be guaranteed) or availability (AP — always answer, risking stale or conflicting data). This system is CP.</dd>
+
+    <dt>Linearizability</dt>
+    <dd>The strongest single-object consistency guarantee: every operation appears to take effect instantaneously at some point between its start and its completion, so a read never returns data older than the most recent completed write.</dd>
+
+    <dt>Replicated log</dt>
+    <dd>The ordered list of state changes that Raft actually replicates. Applying the same entries in the same order gives every node the same state.</dd>
+
+    <dt>Term</dt>
+    <dd>Raft's logical clock. It increments on every election and lets a node detect that its information is stale.</dd>
+
+    <dt>Quorum / majority</dt>
+    <dd><code>⌊N/2⌋+1</code> nodes. Any two quorums overlap in at least one node, which is what makes two simultaneous leaders impossible.</dd>
+
+    <dt>Leader / follower / candidate</dt>
+    <dd>The three Raft roles. Followers accept entries; a follower that stops hearing from the leader becomes a candidate and stands for election; the winner becomes leader.</dd>
+
+    <dt>AppendEntries</dt>
+    <dd>The RPC the leader uses both to replicate log entries and, when empty, as a heartbeat proving it is alive.</dd>
+
+    <dt>Heartbeat timeout</dt>
+    <dd>How long a follower waits without hearing from the leader before standing for election. Randomized in <code>[T, 2T)</code> to prevent split votes.</dd>
+
+    <dt>Split vote</dt>
+    <dd>When several candidates start simultaneously and none reaches a majority, forcing a retry. Randomized timers exist to make this rare.</dd>
+
+    <dt>Split-brain</dt>
+    <dd>Two nodes both believing they are leader, accepting conflicting writes. Quorum overlap makes it arithmetically impossible in Raft.</dd>
+
+    <dt>Commit index / applied index</dt>
+    <dd>The commit index is the highest log entry known to be stored on a majority; the applied index is the highest entry a given node has actually executed against its state.</dd>
+
+    <dt>FSM (finite state machine)</dt>
+    <dd>The application state that log entries are applied to. Here, the key-value map plus the dedup table and peer routing table.</dd>
+
+    <dt>VerifyLeader</dt>
+    <dd>A round-trip to a majority confirming this node is still leader, run before serving a read so a deposed leader cannot return stale data.</dd>
+
+    <dt>Read-Index</dt>
+    <dd>A protocol letting a follower serve a linearizable read: it asks the leader for the current commit index, waits until its own applied index reaches it, then answers locally.</dd>
+
+    <dt>Snapshot / InstallSnapshot</dt>
+    <dd>A compacted image of the state machine, so the log need not be replayed from the beginning. A replica too far behind is caught up by shipping it a snapshot instead of individual entries.</dd>
+
+    <dt>Exactly-once semantics</dt>
+    <dd>Guaranteeing a retried request takes effect once, achieved here by tracking the last sequence number applied per client inside the FSM.</dd>
+
+    <dt>MTTR</dt>
+    <dd>Mean time to recovery — here, how long the cluster is without a leader after one is lost.</dd>
+
+    <dt>Chaos engineering</dt>
+    <dd>Deliberately injecting faults into a running system to check its guarantees hold in practice rather than only on paper.</dd>
+
+    <dt>iptables / tc netem</dt>
+    <dd>Linux kernel facilities for dropping packets and for adding delay or loss to a network interface. Used here to create real partitions and real latency below the application.</dd>
+
+    <dt>SIGKILL / SIGSTOP / SIGCONT</dt>
+    <dd>POSIX signals: kill a process outright (uncatchable), freeze it, and resume it. Freezing simulates a long GC pause or a hung process, which a plain crash cannot.</dd>
+
+    <dt>gRPC</dt>
+    <dd>The RPC framework used for client-to-node communication, on ports separate from Raft's own traffic.</dd>
+
+    <dt>BoltDB / bbolt</dt>
+    <dd>An embedded key-value store providing the fsync guarantees that let the Raft log survive a sudden crash.</dd>
+  </dl>
 </section>
 
 <footer>
   <p>
-    <strong>Distributed Raft KV Store</strong> — CMPT 756, Group 15 (Aarish · Ankith · Dhwani · Ankush).
-    Built on <a href="https://github.com/hashicorp/raft">HashiCorp Raft</a>; documentation by Ankush Singh.
+    <strong>Distributed Raft KV Store</strong> — CMPT 756, Group 15. Built on
+    <a href="https://github.com/hashicorp/raft">HashiCorp Raft</a>.
+    Implementation, chaos-testing infrastructure, analysis and documentation by
+    <strong>Ankush Singh</strong>; Dhwani Patel contributed documentation revisions. Submitted as
+    part of a four-person course team (Aarish · Ankith · Dhwani · Ankush).
   </p>
   <p>
     <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage">Repository</a> ·
     <a href="ARCHITECTURE.md">Architecture notes</a> ·
     <a href="HOW_TO_RUN.md">How to run</a> ·
     <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/tree/main/analysis">Analysis &amp; data</a> ·
+    <a href="https://github.com/Vermillion-1/Distributed-RAFT-KV-Storage/blob/main/existing_issues.md">Known issues</a> ·
     <a href="https://raft.github.io/raft.pdf">Raft paper (Ongaro &amp; Ousterhout)</a>
   </p>
 </footer>
@@ -760,17 +1191,31 @@ const isDark = () => {
 const sources = [...document.querySelectorAll('pre.mermaid')].map(el => el.textContent);
 
 async function render() {
+  const dark = isDark();
   mermaid.initialize({
     startOnLoad: false,
-    theme: isDark() ? 'dark' : 'default',
-    themeVariables: { fontFamily: 'Inter, sans-serif', fontSize: '14px' },
-    flowchart: { curve: 'basis', htmlLabels: true },
-    sequence: { actorMargin: 42, width: 150 }
+    theme: dark ? 'dark' : 'base',
+    // Multi-line node labels use mermaid's backtick markdown-string syntax.
+    // Plain <br>/<small> HTML in labels is stripped by mermaid v11's markdown
+    // pass and collapses into one run-on string. markdownAutoWrap must also be
+    // false, or the markdown pass folds the newlines back into one paragraph.
+    markdownAutoWrap: false,
+    flowchart: { curve: 'basis', htmlLabels: true, padding: 12 },
+    sequence: { actorMargin: 42, width: 150 },
+    themeVariables: dark
+      ? { fontFamily: 'Inter, sans-serif', fontSize: '14px' }
+      : {
+          fontFamily: 'Inter, sans-serif', fontSize: '14px',
+          background: '#f6f1ea',
+          primaryColor: '#dfe9f1', primaryTextColor: '#2f2d35', primaryBorderColor: '#a9c2d3',
+          lineColor: '#918d9c', textColor: '#2f2d35',
+          secondaryColor: '#eeeaf5', tertiaryColor: '#f4efe8',
+          clusterBkg: '#fdfbf8', clusterBorder: '#e9e1d6'
+        }
   });
-  const dark = isDark();
   const palette = dark
-    ? { FOLLOW_FILL: '#1f3b4d', FOLLOW_STROKE: '#3d6a85', FOLLOW_TEXT: '#e6e9ee' }
-    : { FOLLOW_FILL: '#dce8f0', FOLLOW_STROKE: '#9dbdd1', FOLLOW_TEXT: '#1a1d21' };
+    ? { NEUTRAL_FILL: '#26384a', NEUTRAL_STROKE: '#456781', NEUTRAL_TEXT: '#e9e6ef' }
+    : { NEUTRAL_FILL: '#dfe9f1', NEUTRAL_STROKE: '#a9c2d3', NEUTRAL_TEXT: '#2f2d35' };
 
   const nodes = document.querySelectorAll('pre.mermaid');
   for (let i = 0; i < nodes.length; i++) {
@@ -790,21 +1235,30 @@ async function render() {
 }
 render();
 
-// scroll-spy: highlight the section currently in view
+// scroll-spy across both sidebar heading levels
 const tocLinks = [...document.querySelectorAll('aside a[href^="#"]')];
-const watched  = tocLinks
-  .map(a => document.querySelector(a.getAttribute('href')))
-  .filter(Boolean);
-if (watched.length) {
-  const spy = new IntersectionObserver(entries => {
-    entries.forEach(en => {
-      if (!en.isIntersecting) return;
-      tocLinks.forEach(a => a.classList.toggle(
-        'active', a.getAttribute('href') === '#' + en.target.id
-      ));
-    });
-  }, { rootMargin: '-70px 0px -70% 0px', threshold: 0 });
-  watched.forEach(sec => spy.observe(sec));
+const targets  = tocLinks
+  .map(a => ({ link: a, el: document.querySelector(a.getAttribute('href')) }))
+  .filter(t => t.el);
+
+if (targets.length) {
+  const onScroll = () => {
+    const y = window.scrollY + 90;
+    let current = targets[0];
+    for (const t of targets) if (t.el.offsetTop <= y) current = t;
+    tocLinks.forEach(a => a.classList.toggle('active', a === current.link));
+    const aside = document.querySelector('aside');
+    const r = current.link.getBoundingClientRect();
+    const ar = aside.getBoundingClientRect();
+    if (r.top < ar.top || r.bottom > ar.bottom) current.link.scrollIntoView({ block: 'nearest' });
+  };
+  let ticking = false;
+  window.addEventListener('scroll', () => {
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(() => { onScroll(); ticking = false; });
+  }, { passive: true });
+  onScroll();
 }
 
 document.getElementById('themeBtn').addEventListener('click', () => {

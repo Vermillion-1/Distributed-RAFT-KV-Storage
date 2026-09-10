@@ -60,7 +60,7 @@ Each VM runs two independent processes: the Raft replica (`kv-store`) and a faul
 ### Key source files
 
 - **`server/node.go`** — Raft node initialization, leader election callbacks, `Join` handler (`AddVoter`), `Get`/`Set`/`Delete` gRPC handlers, `VerifyLeader()` call on reads
-- **`server/fsm.go`** — Finite State Machine: `Apply()` for writes, `Snapshot()`/`Restore()` for durability, idempotency table (`map[clientID]lastSeq`)
+- **`server/fsm.go`** — Finite State Machine: `Apply()` for writes, `Snapshot()`/`Restore()` for durability, idempotency table (`lastApplied map[string]*clientEntry`)
 - **`proto/kv.proto`** — gRPC service definition: `KVService` with `Get`, `Set`, `Delete`, `Health`, `Join` RPCs
 
 ### Network ports
@@ -98,7 +98,15 @@ The 500ms heartbeat and 750ms election timeout are tuned for GCP cross-zone late
 3. If it receives a majority of votes (⌊N/2⌋ + 1), it becomes leader
 4. The new leader immediately sends heartbeats to suppress further elections
 
-**Observed MTTR:** ~1.25 seconds across both SIGKILL (process death) and iptables partition fault scenarios. The timing: election fires at ~500ms after last heartbeat, new leader elected within one additional election timeout.
+**Observed MTTR:** ~1.2 seconds across both SIGKILL (process death) and iptables partition fault
+scenarios.
+
+Note this is a distribution, not a constant. HashiCorp Raft randomizes both timers to avoid split
+votes — `randomTimeout` returns a value in `[T, 2T)` (`hashicorp/raft@v1.7.3 util.go:33`), so
+detection fires uniformly in `[500ms, 1000ms)` and the election deadline falls in `[750ms, 1500ms)`.
+`ElectionTimeout` is the deadline for an election to complete, not its duration; on a quiet cluster
+the vote itself takes about one round-trip. The GCP harness also times this with bash's `$SECONDS`
+(whole seconds), so ~1.2s is an order-of-magnitude figure. See `existing_issues.md` §1.2 and §3.1.
 
 ### Quorum and N=5 Generalization
 
@@ -134,8 +142,8 @@ kv-store (leader)
   ▼
 server/fsm.go Apply()
   │  (10) checks idempotency table: if clientID+seqNum already seen → skip
-  │  (11) writes key→value to BoltDB KV bucket
-  │  (12) updates idempotency table: lastSeq[clientID] = seqNum
+  │  (11) applies key→value to in-memory FSM map (entry already fsync'd to the Raft log)
+  │  (12) updates idempotency table: lastApplied[clientID] = {seqNum, now}
   ▼
 kv-store (leader)
   │  (13) returns success response to kv-client
@@ -156,7 +164,7 @@ kv-client
 kv-store (leader)
   │  (1) calls VerifyLeader() — sends heartbeat to majority of peers
   │      if majority unreachable → returns error (CP safety enforced)
-  │  (2) reads key from BoltDB KV bucket
+  │  (2) reads key from in-memory FSM map
   │  (3) returns value
 ```
 
@@ -184,13 +192,13 @@ kv-store (leader)
   ▼
 kv-store (follower)
   │  (4) waits until appliedIndex ≥ N
-  │  (5) reads key from local BoltDB KV bucket
+  │  (5) reads key from local in-memory FSM map
   │  (6) returns value to client
 ```
 
 **Why this is linearizable:** The follower's `appliedIndex ≥ N` guarantee means it has applied every log entry up to the leader's current commit point. Any write that completed before the read (from the client's perspective) has a Raft log index ≤ N, so the follower has necessarily applied it.
 
-**Tested by:** `GCP_verify_phase7.sh` — 6 scenarios covering fresh writes, writes under partition, and cross-follower consistency. All 6/6 pass.
+**Tested by:** `GCP_verify_phase7.sh` — 5 scenarios (T1–T5) covering fresh writes, missing keys, updated values, and leader-redirect reads. All 5/5 pass.
 
 ---
 
@@ -206,18 +214,27 @@ Each client assigns a monotonically increasing `seqNum` to every write. The FSM 
 
 ```go
 // server/fsm.go
-type KVStore struct {
-    data      map[string]string   // key → value
-    lastSeq   map[string]uint64   // clientID → last applied seqNum
+type clientEntry struct {
+    SeqNum   uint64
+    LastSeen time.Time   // enables TTL eviction of idle clients
 }
 
-func (k *KVStore) Apply(log *raft.Log) interface{} {
+type KVStore struct {
+    m           map[string]string       // key → value (in memory)
+    lastApplied map[string]*clientEntry // clientID → last applied entry
+    Peers       map[string]string       // raftAddr → grpcAddr (service discovery)
+}
+
+func (s *KVStore) Apply(l *raft.Log) interface{} {
     // ...decode command...
-    if cmd.SeqNum > 0 && cmd.SeqNum <= k.lastSeq[cmd.ClientID] {
-        return nil  // duplicate — silently drop
+    switch c.Op {
+    case "set":
+        if s.isDuplicate(c.ClientID, c.SeqNum) {
+            return nil // duplicate — silently drop
+        }
+        s.m[c.Key] = c.Value
+        s.recordApplied(c.ClientID, c.SeqNum)
     }
-    k.data[cmd.Key] = cmd.Value
-    k.lastSeq[cmd.ClientID] = cmd.SeqNum
 }
 ```
 
