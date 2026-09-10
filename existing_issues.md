@@ -255,7 +255,7 @@ highest-value remaining engineering work.
 
 ---
 
-## 4. Attribution — **OPEN, author's call**
+## 4. Attribution — **RESOLVED**
 
 The footer credits "CMPT 756, Group 15 (Aarish · Ankith · Dhwani · Ankush)".
 
@@ -264,18 +264,48 @@ Git history across both the public repo and the original prototype:
 | Author | Commits | Touches |
 |---|---|---|
 | Ankush Singh (2 emails) | 30 | All Go source — `server/`, `cmd/`, `proto/`, `main.go` — plus scripts, analysis, docs |
-| Dhwani Patel | 7 | `README.md` and `docs/*.md` only — heading and formatting fixes |
+| Dhwani Patel | 7 | Markdown formatting only — see below |
 | Aarish | 0 | — |
 | Ankith | 0 | — |
 
-The prototype repo is 24 commits, 100% Ankush Singh, across all branches. `LICENSE:190` names
-Ankush Singh as sole copyright holder.
+Dhwani Patel's seven commits all landed on 2026-04-08 between 17:24 and 17:30 — a six-minute
+window, four days after the final GCP run. Every diff is symmetric (1+/1−, 27+/27−, 36+/36−): lines
+rewritten in place with no new content, removing emoji from headings and table rows. Five of the six
+files touched (`docs/1_QUICKSTART.md` … `docs/5_CODE.md`) no longer exist — that documentation
+structure was replaced.
+
+The prototype repo is 24 commits, 100% Ankush Singh, across all branches.
 
 This may simply reflect one person operating git for a course team, which is common and not
-dishonest. But as written, a reader infers shared code authorship for four people, and the
-repository does not support that for two of them. **Either state the division of labour explicitly
-or make the individual contribution clear.** The current phrasing understates the author's own role
-while implying contributions that leave no trace.
+dishonest. But as originally written, a reader inferred shared code authorship for four people, and
+the repository does not support that.
+
+**Resolution:** the footer now credits implementation, chaos-testing infrastructure, analysis and
+documentation to Ankush Singh, and separately notes the work was submitted as part of a four-person
+course team, naming all four. Nothing is erased — the team credit stands — but no per-person
+contribution claims are made beyond what the history supports.
+
+---
+
+## 4b. Copyright and licensing — **OPEN, needs a decision outside the repo**
+
+`LICENSE` is the stock Apache-2.0 text, but line 190 sits **inside the license's own APPENDIX** —
+the "How to apply the Apache License to your work" template — with the placeholder filled in as
+`Copyright 2025 Ankush Singh`. That is instructional boilerplate, not an applied copyright notice
+in a `NOTICE` file or source headers, so the repository does not currently make a clean copyright
+assertion anywhere. The year also reads 2025 while the git history runs March–April 2026.
+
+Two things are genuinely unresolved and should not be guessed at:
+
+1. **Who owns copyright in coursework produced for a class at SFU.** University IP policies vary,
+   and this needs to be read against SFU's actual policy rather than assumed.
+2. **Joint authorship.** Even setting the university question aside, this was submitted as a
+   four-person course project. A sole-holder notice is the strongest possible claim and the one
+   most likely to be wrong.
+
+Lowest-risk option until that is settled: remove the filled-in appendix line so `LICENSE` is
+unmodified stock Apache-2.0 text. The license grant still works — it is what lets others use the
+code — without the repository asserting who holds the copyright.
 
 ---
 
